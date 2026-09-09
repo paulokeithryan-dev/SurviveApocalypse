@@ -427,10 +427,29 @@ CratesTab:CreateButton({
 --------------------------------------------------------------------------------
 -- MOVEMENT TAB
 --------------------------------------------------------------------------------
+MovementTab:CreateSlider({
+    Name = "WalkSpeed Multiplier",
+    Range = {16, 120},
+    Increment = 2,
+    CurrentValue = 16,
+    Flag = "SpeedSlider",
+    Callback = function(Value)
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = Value
+        end
+    end,
+})
+
+--------------------------------------------------------------------------------
+-- MISC TAB (Noclip, Remove Fog, Fullbright, Zoom, Low Graphics)
+--------------------------------------------------------------------------------
+-- NOCLIP
 local NoclipEnabled = false
 local NoclipConnection = nil
 
-MovementTab:CreateToggle({
+MiscTab:CreateToggle({
     Name = "Noclip (Walk Through Walls)",
     CurrentValue = false,
     Flag = "NoclipToggle",
@@ -458,24 +477,6 @@ MovementTab:CreateToggle({
     end,
 })
 
-MovementTab:CreateSlider({
-    Name = "WalkSpeed Multiplier",
-    Range = {16, 120},
-    Increment = 2,
-    CurrentValue = 16,
-    Flag = "SpeedSlider",
-    Callback = function(Value)
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = Value
-        end
-    end,
-})
-
---------------------------------------------------------------------------------
--- MISC TAB (Remove Fog & Low Graphics)
---------------------------------------------------------------------------------
 -- REMOVE FOG
 local RemoveFogEnabled = false
 local FogConnection = nil
@@ -504,11 +505,45 @@ MiscTab:CreateToggle({
                 FogConnection:Disconnect()
                 FogConnection = nil
             end
-            lighting.FogEnd = 1000 -- fallback standard
+            lighting.FogEnd = 1000
             local atmosphere = lighting:FindFirstChildOfClass("Atmosphere")
             if atmosphere then
-                atmosphere.Density = 0.3 -- fallback standard
+                atmosphere.Density = 0.3
             end
+        end
+    end,
+})
+
+-- FULLBRIGHT
+local FullbrightEnabled = false
+local FullbrightConnection = nil
+
+MiscTab:CreateToggle({
+    Name = "Fullbright",
+    CurrentValue = false,
+    Flag = "FullbrightToggle",
+    Callback = function(Value)
+        FullbrightEnabled = Value
+        local lighting = game:GetService("Lighting")
+        if FullbrightEnabled then
+            lighting.Brightness = 2
+            lighting.ClockTime = 14
+            lighting.GlobalShadows = false
+            lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+            FullbrightConnection = RunService.RenderStepped:Connect(function()
+                lighting.Brightness = 2
+                lighting.ClockTime = 14
+                lighting.GlobalShadows = false
+                lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+            end)
+        else
+            if FullbrightConnection then
+                FullbrightConnection:Disconnect()
+                FullbrightConnection = nil
+            end
+            lighting.Brightness = 1
+            lighting.GlobalShadows = true
+            lighting.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
         end
     end,
 })
