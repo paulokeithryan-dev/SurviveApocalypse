@@ -31,6 +31,7 @@ local BackpackTab = Window:CreateTab("Backpack", "briefcase")
 local CratesTab = Window:CreateTab("Crates", "box")
 local MovementTab = Window:CreateTab("Movement", "footprints")
 local ESPTab = Window:CreateTab("ESP", "eye")
+local MiscTab = Window:CreateTab("Misc", "settings")
 
 --------------------------------------------------------------------------------
 -- AIMLOCK CONFIGURATION & STATE
@@ -424,7 +425,7 @@ CratesTab:CreateButton({
 })
 
 --------------------------------------------------------------------------------
--- MOVEMENT & UTILITY TAB
+-- MOVEMENT TAB
 --------------------------------------------------------------------------------
 local NoclipEnabled = false
 local NoclipConnection = nil
@@ -472,38 +473,14 @@ MovementTab:CreateSlider({
     end,
 })
 
--- INFINITE ZOOM OUT
-local InfiniteZoomEnabled = false
-local ZoomConnection = nil
-
-MovementTab:CreateToggle({
-    Name = "Infinite Zoom Out",
-    CurrentValue = false,
-    Flag = "InfiniteZoomToggle",
-    Callback = function(Value)
-        InfiniteZoomEnabled = Value
-        if InfiniteZoomEnabled then
-            LocalPlayer.CameraMaxZoomDistance = 99999
-            ZoomConnection = RunService.RenderStepped:Connect(function()
-                if LocalPlayer.CameraMaxZoomDistance ~= 99999 then
-                    LocalPlayer.CameraMaxZoomDistance = 99999
-                end
-            end)
-        else
-            if ZoomConnection then
-                ZoomConnection:Disconnect()
-                ZoomConnection = nil
-            end
-            LocalPlayer.CameraMaxZoomDistance = 128
-        end
-    end,
-})
-
+--------------------------------------------------------------------------------
+-- MISC TAB (Remove Fog & Low Graphics)
+--------------------------------------------------------------------------------
 -- REMOVE FOG
 local RemoveFogEnabled = false
 local FogConnection = nil
 
-MovementTab:CreateToggle({
+MiscTab:CreateToggle({
     Name = "Remove Fog",
     CurrentValue = false,
     Flag = "RemoveFogToggle",
@@ -536,6 +513,33 @@ MovementTab:CreateToggle({
     end,
 })
 
+-- INFINITE ZOOM OUT
+local InfiniteZoomEnabled = false
+local ZoomConnection = nil
+
+MiscTab:CreateToggle({
+    Name = "Infinite Zoom Out",
+    CurrentValue = false,
+    Flag = "InfiniteZoomToggle",
+    Callback = function(Value)
+        InfiniteZoomEnabled = Value
+        if InfiniteZoomEnabled then
+            LocalPlayer.CameraMaxZoomDistance = 99999
+            ZoomConnection = RunService.RenderStepped:Connect(function()
+                if LocalPlayer.CameraMaxZoomDistance ~= 99999 then
+                    LocalPlayer.CameraMaxZoomDistance = 99999
+                end
+            end)
+        else
+            if ZoomConnection then
+                ZoomConnection:Disconnect()
+                ZoomConnection = nil
+            end
+            LocalPlayer.CameraMaxZoomDistance = 128
+        end
+    end,
+})
+
 -- LOW GRAPHICS (SMOOTH PLASTIC)
 local LowGraphicsEnabled = false
 
@@ -550,7 +554,7 @@ local function ApplyLowGraphics(inst)
     end
 end
 
-MovementTab:CreateToggle({
+MiscTab:CreateToggle({
     Name = "Low Graphics (Smooth Plastic)",
     CurrentValue = false,
     Flag = "LowGraphicsToggle",
