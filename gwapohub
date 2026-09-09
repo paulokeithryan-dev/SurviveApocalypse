@@ -424,7 +424,7 @@ CratesTab:CreateButton({
 })
 
 --------------------------------------------------------------------------------
--- MOVEMENT TAB
+-- MOVEMENT & UTILITY TAB
 --------------------------------------------------------------------------------
 local NoclipEnabled = false
 local NoclipConnection = nil
@@ -472,11 +472,127 @@ MovementTab:CreateSlider({
     end,
 })
 
+-- INFINITE ZOOM OUT
+local InfiniteZoomEnabled = false
+local ZoomConnection = nil
+
+MovementTab:CreateToggle({
+    Name = "Infinite Zoom Out",
+    CurrentValue = false,
+    Flag = "InfiniteZoomToggle",
+    Callback = function(Value)
+        InfiniteZoomEnabled = Value
+        if InfiniteZoomEnabled then
+            LocalPlayer.CameraMaxZoomDistance = 99999
+            ZoomConnection = RunService.RenderStepped:Connect(function()
+                if LocalPlayer.CameraMaxZoomDistance ~= 99999 then
+                    LocalPlayer.CameraMaxZoomDistance = 99999
+                end
+            end)
+        else
+            if ZoomConnection then
+                ZoomConnection:Disconnect()
+                ZoomConnection = nil
+            end
+            LocalPlayer.CameraMaxZoomDistance = 128
+        end
+    end,
+})
+
+-- REMOVE FOG
+local RemoveFogEnabled = false
+local FogConnection = nil
+
+MovementTab:CreateToggle({
+    Name = "Remove Fog",
+    CurrentValue = false,
+    Flag = "RemoveFogToggle",
+    Callback = function(Value)
+        RemoveFogEnabled = Value
+        local lighting = game:GetService("Lighting")
+        if RemoveFogEnabled then
+            lighting.FogEnd = 9e9
+            local atmosphere = lighting:FindFirstChildOfClass("Atmosphere")
+            if atmosphere then
+                atmosphere.Density = 0
+            end
+            FogConnection = RunService.RenderStepped:Connect(function()
+                lighting.FogEnd = 9e9
+                if atmosphere then
+                    atmosphere.Density = 0
+                end
+            end)
+        else
+            if FogConnection then
+                FogConnection:Disconnect()
+                FogConnection = nil
+            end
+            lighting.FogEnd = 1000 -- fallback standard
+            local atmosphere = lighting:FindFirstChildOfClass("Atmosphere")
+            if atmosphere then
+                atmosphere.Density = 0.3 -- fallback standard
+            end
+        end
+    end,
+})
+
+-- LOW GRAPHICS (SMOOTH PLASTIC)
+local LowGraphicsEnabled = false
+
+local function ApplyLowGraphics(inst)
+    if inst:IsA("BasePart") then
+        inst.Material = Enum.Material.SmoothPlastic
+        inst.Reflectance = 0
+    elseif inst:IsA("Decal") or inst:IsA("Texture") then
+        inst.Transparency = 1
+    elseif inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
+        inst.Enabled = false
+    end
+end
+
+MovementTab:CreateToggle({
+    Name = "Low Graphics (Smooth Plastic)",
+    CurrentValue = false,
+    Flag = "LowGraphicsToggle",
+    Callback = function(Value)
+        LowGraphicsEnabled = Value
+        if LowGraphicsEnabled then
+            local lighting = game:GetService("Lighting")
+            lighting.GlobalShadows = false
+            
+            for _, v in ipairs(lighting:GetChildren()) do
+                if v:IsA("PostEffect") or v:IsA("BlurEffect") or v:IsA("SunRaysEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") then
+                    v.Enabled = false
+                end
+            end
+
+            for _, desc in ipairs(workspace:GetDescendants()) do
+                ApplyLowGraphics(desc)
+            end
+
+            if workspace.Terrain then
+                workspace.Terrain.WaterWaveSize = 0
+                workspace.Terrain.WaterWaveSpeed = 0
+                workspace.Terrain.WaterReflectance = 0
+                workspace.Terrain.WaterTransparency = 0
+            end
+        end
+    end,
+})
+
+workspace.DescendantAdded:Connect(function(desc)
+    if LowGraphicsEnabled then
+        task.wait()
+        ApplyLowGraphics(desc)
+    end
+end)
+
 --------------------------------------------------------------------------------
--- COLOR-CODED NAMED DOT ESP ENGINE WITH ITEM NAMES
+-- ESP ENGINE
 --------------------------------------------------------------------------------
 local ESPZombieEnabled = false
 local ESPSurvivorEnabled = false
+local ESPPlayerEnabled = false
 local ESPSelectedItemEnabled = false
 local ESPAllItemsEnabled = false
 local ESPSelectedCrateEnabled = false
@@ -504,7 +620,7 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     if targetInstance:IsA("BasePart") then
         adorneePart = targetInstance
     elseif targetInstance:IsA("Model") then
-        adorneePart = targetInstance.PrimaryPart or targetInstance:FindFirstChildOfClass("BasePart") or targetInstance:FindFirstChild("Chips", true)
+        adorneePart = targetInstance.PrimaryPart or targetInstance:FindFirstChildOfClass("BasePart") or targetInstance:FindFirstChild("Head", true) or targetInstance:FindFirstChild("HumanoidRootPart", true)
     end
 
     if not adorneePart then return end
@@ -536,7 +652,6 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     gui.AlwaysOnTop = true
     gui.Parent = adorneePart
 
-    -- Colored ESP Dot
     local dot = Instance.new("Frame")
     dot.Size = UDim2.new(0, 8, 0, 8)
     dot.Position = UDim2.new(0.5, -4, 0.5, -4)
@@ -548,7 +663,6 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     corner.CornerRadius = UDim.new(1, 0)
     corner.Parent = dot
 
-    -- Dynamic Name + Distance Text Label
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(1, 0, 0, 20)
     label.Position = UDim2.new(0, 0, 0, -20)
@@ -594,6 +708,37 @@ ESPTab:CreateToggle({
                             if isZombieEnemy(char) and canBeDamaged(char) then
                                 CreateOrUpdateDotESP(char, "ZombieDotESP", char.Name, Color3.fromRGB(255, 50, 50))
                             end
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Player ESP (Name + Blue Dot)",
+    CurrentValue = false,
+    Flag = "PlayerESPToggle",
+    Callback = function(Value)
+        ESPPlayerEnabled = Value
+        if not ESPPlayerEnabled then
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr.Character then
+                    for _, desc in ipairs(plr.Character:GetDescendants()) do
+                        if desc:IsA("BillboardGui") and desc.Name == "PlayerDotESP" then
+                            desc:Destroy()
+                        end
+                    end
+                end
+            end
+        else
+            task.spawn(function()
+                while ESPPlayerEnabled do
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LocalPlayer and plr.Character then
+                            CreateOrUpdateDotESP(plr.Character, "PlayerDotESP", plr.Name, Color3.fromRGB(50, 150, 255))
                         end
                     end
                     task.wait(0.2)
