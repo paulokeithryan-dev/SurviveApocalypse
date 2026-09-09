@@ -184,44 +184,47 @@ local function getClosestZombie()
 end
 
 --------------------------------------------------------------------------------
--- SILENT AIM METAMETHOD HOOK (SHOOT REMOTE INTERCEPTOR)
+-- SAFE SILENT AIM HOOK
 --------------------------------------------------------------------------------
-local rawNamecall; rawNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
+if hookmetamethod and getnamecallmethod then
+    pcall(function()
+        local rawNamecall; rawNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            local method = getnamecallmethod()
+            local args = {...}
 
-    if SilentAimEnabled and method == "FireServer" and tostring(self) == "Shoot" then
-        local targetPart = getClosestZombie()
-        if targetPart and targetPart.Parent then
-            local targetChar = targetPart.Parent
-            local origin = args[1] or getLocalRootPosition()
-            local targetPos = targetPart.Position
+            if SilentAimEnabled and method == "FireServer" and tostring(self) == "Shoot" then
+                local targetPart = getClosestZombie()
+                if targetPart and targetPart.Parent then
+                    local targetChar = targetPart.Parent
+                    local origin = args[1] or getLocalRootPosition()
+                    local targetPos = targetPart.Position
 
-            -- Intercept payload structure based on captured remote spy logs
-            args[2] = {
-                {
-                    Target = targetPos,
-                    HitData = {
+                    args[2] = {
                         {
-                            HitChar = targetChar,
-                            HitPos = targetPos,
-                            HitPart = targetPart
-                        }
-                    },
-                    EffectResults = {
-                        {
-                            Origin = origin,
-                            End = targetPos
+                            Target = targetPos,
+                            HitData = {
+                                {
+                                    HitChar = targetChar,
+                                    HitPos = targetPos,
+                                    HitPart = targetPart
+                                }
+                            },
+                            EffectResults = {
+                                {
+                                    Origin = origin,
+                                    End = targetPos
+                                }
+                            }
                         }
                     }
-                }
-            }
-            return rawNamecall(self, table.unpack(args))
-        end
-    end
+                    return rawNamecall(self, table.unpack(args))
+                end
+            end
 
-    return rawNamecall(self, ...)
-end)
+            return rawNamecall(self, ...)
+        end)
+    end)
+end
 
 --------------------------------------------------------------------------------
 -- COMBAT TAB CONTROLS
@@ -244,7 +247,6 @@ CombatTab:CreateToggle({
     end,
 })
 
--- MELEE KILL AURA (CROWBAR / SWING & HIT TARGETS)
 CombatTab:CreateToggle({
     Name = "Melee Kill Aura (Crowbar / Melee)",
     CurrentValue = false,
@@ -300,7 +302,6 @@ task.spawn(function()
     end
 end)
 
--- AUTO TARGET CLIENT SYNC
 CombatTab:CreateToggle({
     Name = "Auto-Sync Nearby Targets (Server Radar)",
     CurrentValue = false,
@@ -335,20 +336,17 @@ task.spawn(function()
     end
 end)
 
--- INSTANT RELOAD & REMOTE RELOAD / SYNC AMMO
 local InstantReloadEnabled = false
 
 local function ApplyInstantReload(tool)
     if not tool or not tool:IsA("Tool") then return end
     
-    -- Zero out reload attributes
     for _, attr in ipairs({"ReloadTime", "ReloadDuration", "ReloadSpeed", "ReloadDelay", "Cooldown"}) do
         if tool:GetAttribute(attr) ~= nil then
             tool:SetAttribute(attr, 0)
         end
     end
 
-    -- Zero out Value instances inside the tool
     for _, desc in ipairs(tool:GetDescendants()) do
         if desc:IsA("ValueBase") then
             local name = desc.Name:lower()
@@ -434,7 +432,6 @@ CombatTab:CreateButton({
     end,
 })
 
--- Listen for new tools added to backpack or character
 local function HookToolListeners(container)
     if not container then return end
     container.ChildAdded:Connect(function(child)
@@ -731,7 +728,7 @@ MovementTab:CreateSlider({
 })
 
 --------------------------------------------------------------------------------
--- MISC TAB (Instant Prompts, Noclip, Remove Fog, Fullbright, Zoom, Low Graphics)
+-- MISC TAB
 --------------------------------------------------------------------------------
 local InstantPromptsEnabled = false
 local PromptConnection = nil
@@ -1348,7 +1345,7 @@ RunService.RenderStepped:Connect(function()
                 local currentCFrame = Camera.CFrame
                 local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPos)
                 Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.Smoothness)
-            elseif Settings.AimMethod == "MouseRel" then
+            elseif Settings.AimMethod == "MouseRel" and mousemoverel then
                 local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
                 if onScreen then
                     local mousePos = UserInputService:GetMouseLocation()
