@@ -1,0 +1,819 @@
+-- Load Rayfield Library
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Create Window
+local Window = Rayfield:CreateWindow({
+    Name = "Zombie Aimlock & Utility Hub",
+    LoadingTitle = "Loading Script...",
+    LoadingSubtitle = "Rayfield UI",
+    ConfigurationSaving = { Enabled = false },
+    Discord = { Enabled = false },
+    KeySystem = false
+})
+
+-- Create Tabs
+local CombatTab = Window:CreateTab("Combat", "crosshair")
+local ItemsTab = Window:CreateTab("Items", "package")
+local BackpackTab = Window:CreateTab("Backpack", "briefcase")
+local CratesTab = Window:CreateTab("Crates", "box")
+local MovementTab = Window:CreateTab("Movement", "footprints")
+local ESPTab = Window:CreateTab("ESP", "eye")
+
+--------------------------------------------------------------------------------
+-- AIMLOCK CONFIGURATION & STATE
+--------------------------------------------------------------------------------
+local Settings = {
+    AimlockEnabled = true,
+    Keybind = Enum.UserInputType.MouseButton2, -- Right Click Hold
+    CheckDamageable = true,
+    TargetMode = "Distance", -- "Distance" or "Cursor"
+    MaxDistance = 500,       -- 0 = Unlimited
+    AimMethod = "Camera",    -- "Camera" or "MouseRel"
+    IgnorePlayers = true,    -- Ensures players are never targeted
+    Smoothness = 0.5,
+    FOVSize = 100,
+    ShowFOV = true
+}
+
+local lockedTarget = nil
+local isAiming = false
+
+-- FOV Circle Setup
+local FOVCircle = nil
+if Drawing and Drawing.new then
+    pcall(function()
+        FOVCircle = Drawing.new("Circle")
+        FOVCircle.Color = Color3.fromRGB(255, 50, 50)
+        FOVCircle.Thickness = 1.5
+        FOVCircle.NumSides = 64
+        FOVCircle.Radius = Settings.FOVSize
+        FOVCircle.Filled = false
+        FOVCircle.Visible = Settings.ShowFOV
+    end)
+end
+
+----------------------------------------------------
+-- AIMLOCK HELPER & VERIFICATION FUNCTIONS
+----------------------------------------------------
+local function canBeDamaged(character)
+    if not character then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+
+    if Settings.CheckDamageable then
+        if character:FindFirstChildOfClass("ForceField") or character:FindFirstChild("ForceField") then
+            return false
+        end
+
+        if character:GetAttribute("IsInvulnerable") == true 
+           or character:GetAttribute("Invulnerable") == true 
+           or character:GetAttribute("SafeZone") == true 
+           or character:GetAttribute("Protected") == true 
+           or character:GetAttribute("GodMode") == true then
+            return false
+        end
+
+        local invulnValChar = character:FindFirstChild("IsInvulnerable") or character:FindFirstChild("GodMode") or character:FindFirstChild("Invulnerable")
+        if invulnValChar and invulnValChar:IsA("ValueBase") and invulnValChar.Value == true then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function isPlayerCharacter(character)
+    if not character then return false end
+    
+    if Players:GetPlayerFromCharacter(character) then
+        return true
+    end
+
+    if character:GetAttribute("IsPlayer") == true 
+       or character:GetAttribute("Player") == true 
+       or character:GetAttribute("IsHuman") == true then
+        return true
+    end
+
+    if character:FindFirstChild("IsPlayer") or character:FindFirstChild("Player") then
+        return true
+    end
+
+    return false
+end
+
+local function isZombieEnemy(character)
+    if not character then return false end
+    if character == LocalPlayer.Character then return false end
+
+    if Settings.IgnorePlayers and isPlayerCharacter(character) then
+        return false
+    end
+
+    return true
+end
+
+local function getTargetPart(character)
+    if not character or not canBeDamaged(character) then return nil end
+
+    return character:FindFirstChild("Head") 
+        or character:FindFirstChild("UpperTorso") 
+        or character:FindFirstChild("Torso") 
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getLocalRootPosition()
+    if LocalPlayer.Character then
+        local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Head")
+        if hrp then return hrp.Position end
+    end
+    return Camera.CFrame.Position
+end
+
+local function getClosestZombie()
+    local closestPart = nil
+    local shortestMetric = math.huge
+    local mousePos = UserInputService:GetMouseLocation()
+    local myPos = getLocalRootPosition()
+
+    local charactersFolder = workspace:FindFirstChild("Characters")
+    if not charactersFolder then return nil end
+
+    for _, char in ipairs(charactersFolder:GetChildren()) do
+        if isZombieEnemy(char) and canBeDamaged(char) then
+            local part = getTargetPart(char)
+            if part then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local cursorDistance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                    
+                    if cursorDistance <= Settings.FOVSize then
+                        local worldDistance = (part.Position - myPos).Magnitude
+                        
+                        if Settings.MaxDistance == 0 or worldDistance <= Settings.MaxDistance then
+                            if Settings.TargetMode == "Distance" then
+                                if worldDistance < shortestMetric then
+                                    shortestMetric = worldDistance
+                                    closestPart = part
+                                end
+                            else
+                                if cursorDistance < shortestMetric then
+                                    shortestMetric = cursorDistance
+                                    closestPart = part
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return closestPart
+end
+
+--------------------------------------------------------------------------------
+-- COMBAT TAB CONTROLS
+--------------------------------------------------------------------------------
+CombatTab:CreateToggle({
+    Name = "Enable Zombie Aimlock",
+    CurrentValue = true,
+    Flag = "AimlockEnabledToggle",
+    Callback = function(Value)
+        Settings.AimlockEnabled = Value
+    end,
+})
+
+CombatTab:CreateDropdown({
+    Name = "Target Mode",
+    Options = {"Distance", "Cursor"},
+    CurrentOption = {"Distance"},
+    MultipleOptions = false,
+    Flag = "TargetModeDropdown",
+    Callback = function(Option)
+        Settings.TargetMode = type(Option) == "table" and Option[1] or Option
+    end,
+})
+
+CombatTab:CreateDropdown({
+    Name = "Aim Method",
+    Options = {"Camera", "MouseRel"},
+    CurrentOption = {"Camera"},
+    MultipleOptions = false,
+    Flag = "AimMethodDropdown",
+    Callback = function(Option)
+        Settings.AimMethod = type(Option) == "table" and Option[1] or Option
+    end,
+})
+
+CombatTab:CreateSlider({
+    Name = "Smoothness",
+    Range = {0.1, 1.0},
+    Increment = 0.05,
+    CurrentValue = 0.5,
+    Flag = "SmoothnessSlider",
+    Callback = function(Value)
+        Settings.Smoothness = Value
+    end,
+})
+
+CombatTab:CreateSlider({
+    Name = "FOV Size",
+    Range = {30, 500},
+    Increment = 10,
+    CurrentValue = 100,
+    Flag = "FOVSizeSlider",
+    Callback = function(Value)
+        Settings.FOVSize = Value
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Show FOV Circle",
+    CurrentValue = true,
+    Flag = "ShowFOVToggle",
+    Callback = function(Value)
+        Settings.ShowFOV = Value
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Ignore Human Players",
+    CurrentValue = true,
+    Flag = "IgnorePlayersToggle",
+    Callback = function(Value)
+        Settings.IgnorePlayers = Value
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Check Damageable / SafeZones",
+    CurrentValue = true,
+    Flag = "CheckDamageableToggle",
+    Callback = function(Value)
+        Settings.CheckDamageable = Value
+    end,
+})
+
+CombatTab:CreateSlider({
+    Name = "Max Lock Distance (Studs)",
+    Range = {0, 1000},
+    Increment = 25,
+    CurrentValue = 500,
+    Flag = "MaxDistanceSlider",
+    Callback = function(Value)
+        Settings.MaxDistance = Value
+    end,
+})
+
+--------------------------------------------------------------------------------
+-- ITEMS TAB
+--------------------------------------------------------------------------------
+local SelectedItemName = nil
+
+local function GetGroupedItemNames()
+    local counts = {}
+    local droppedFolder = workspace:FindFirstChild("DroppedItems")
+    if droppedFolder then
+        for _, item in ipairs(droppedFolder:GetChildren()) do
+            counts[item.Name] = (counts[item.Name] or 0) + 1
+        end
+    end
+
+    local options = {}
+    for name, count in pairs(counts) do
+        table.insert(options, string.format("%s x%d", name, count))
+    end
+
+    if #options == 0 then
+        table.insert(options, "No items found")
+    else
+        table.sort(options)
+    end
+    return options
+end
+
+local ItemDropdown = ItemsTab:CreateDropdown({
+    Name = "Select Target Item",
+    Options = GetGroupedItemNames(),
+    CurrentOption = {"No items found"},
+    MultipleOptions = false,
+    Flag = "ItemDropdown",
+    Callback = function(Options)
+        local rawOption = type(Options) == "table" and Options[1] or Options
+        if rawOption and rawOption ~= "No items found" then
+            SelectedItemName = rawOption:match("^(.-)%s*x%d+$") or rawOption
+        else
+            SelectedItemName = nil
+        end
+    end,
+})
+
+task.spawn(function()
+    local lastSerialized = ""
+    while task.wait(1) do
+        local currentOptions = GetGroupedItemNames()
+        local currentSerialized = table.concat(currentOptions, "|")
+        if currentSerialized ~= lastSerialized then
+            lastSerialized = currentSerialized
+            ItemDropdown:Refresh(currentOptions)
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- BACKPACK TAB
+--------------------------------------------------------------------------------
+local SelectedBackpackItem = nil
+
+local function GetBackpackStorageItems()
+    local counts = {}
+    local storage = ReplicatedStorage:FindFirstChild("BackpackStorage")
+    if storage then
+        for _, item in ipairs(storage:GetChildren()) do
+            counts[item.Name] = (counts[item.Name] or 0) + 1
+        end
+    end
+
+    local options = {}
+    for name, count in pairs(counts) do
+        table.insert(options, string.format("%s x%d", name, count))
+    end
+
+    if #options == 0 then
+        table.insert(options, "No storage items found")
+    else
+        table.sort(options)
+    end
+    return options
+end
+
+local BackpackDropdown = BackpackTab:CreateDropdown({
+    Name = "Select Storage Item",
+    Options = GetBackpackStorageItems(),
+    CurrentOption = {"No storage items found"},
+    MultipleOptions = false,
+    Flag = "BackpackStorageDropdown",
+    Callback = function(Options)
+        local rawOption = type(Options) == "table" and Options[1] or Options
+        if rawOption and rawOption ~= "No storage items found" then
+            SelectedBackpackItem = rawOption:match("^(.-)%s*x%d+$") or rawOption
+        else
+            SelectedBackpackItem = nil
+        end
+    end,
+})
+
+task.spawn(function()
+    local lastSerialized = ""
+    while task.wait(1) do
+        local currentOptions = GetBackpackStorageItems()
+        local currentSerialized = table.concat(currentOptions, "|")
+        if currentSerialized ~= lastSerialized then
+            lastSerialized = currentSerialized
+            BackpackDropdown:Refresh(currentOptions)
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- CRATES TAB
+--------------------------------------------------------------------------------
+local SelectedCrateName = nil
+
+local function GetCrateNames()
+    local names = {}
+    local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+    if cratesFolder then
+        for index, crate in ipairs(cratesFolder:GetChildren()) do
+            table.insert(names, string.format("[%d] %s", index, crate.Name))
+        end
+    end
+    if #names == 0 then table.insert(names, "No crates found") end
+    return names
+end
+
+local CrateDropdown = CratesTab:CreateDropdown({
+    Name = "Select Crate / Chest",
+    Options = GetCrateNames(),
+    CurrentOption = {"No crates found"},
+    MultipleOptions = false,
+    Flag = "CrateDropdown",
+    Callback = function(Options)
+        SelectedCrateName = type(Options) == "table" and Options[1] or Options
+    end,
+})
+
+CratesTab:CreateButton({
+    Name = "Refresh Crate List",
+    Callback = function()
+        CrateDropdown:Refresh(GetCrateNames())
+    end,
+})
+
+--------------------------------------------------------------------------------
+-- MOVEMENT TAB
+--------------------------------------------------------------------------------
+local NoclipEnabled = false
+local NoclipConnection = nil
+
+MovementTab:CreateToggle({
+    Name = "Noclip (Walk Through Walls)",
+    CurrentValue = false,
+    Flag = "NoclipToggle",
+    Callback = function(Value)
+        NoclipEnabled = Value
+        if NoclipEnabled then
+            if not NoclipConnection then
+                NoclipConnection = RunService.Stepped:Connect(function()
+                    local char = LocalPlayer.Character
+                    if char then
+                        for _, part in ipairs(char:GetDescendants()) do
+                            if part:IsA("BasePart") then
+                                part.CanCollide = false
+                            end
+                        end
+                    end
+                end)
+            end
+        else
+            if NoclipConnection then
+                NoclipConnection:Disconnect()
+                NoclipConnection = nil
+            end
+        end
+    end,
+})
+
+MovementTab:CreateSlider({
+    Name = "WalkSpeed Multiplier",
+    Range = {16, 120},
+    Increment = 2,
+    CurrentValue = 16,
+    Flag = "SpeedSlider",
+    Callback = function(Value)
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = Value
+        end
+    end,
+})
+
+--------------------------------------------------------------------------------
+-- COLOR-CODED NAMED DOT ESP ENGINE
+--------------------------------------------------------------------------------
+local ESPZombieEnabled = false
+local ESPSurvivorEnabled = false
+local ESPSelectedItemEnabled = false
+local ESPAllItemsEnabled = false
+local ESPSelectedCrateEnabled = false
+local ESPCratesEnabled = false
+local ESPAirdropEnabled = false
+
+local function GetItemTypeColor(itemName)
+    local lower = itemName:lower()
+    if lower:find("gun") or lower:find("rifle") or lower:find("pistol") or lower:find("ammo") or lower:find("weapon") or lower:find("shotgun") or lower:find("smg") then
+        return Color3.fromRGB(255, 85, 85)
+    elseif lower:find("med") or lower:find("bandage") or lower:find("heal") or lower:find("food") or lower:find("drink") or lower:find("blood") then
+        return Color3.fromRGB(85, 255, 85)
+    elseif lower:find("armor") or lower:find("helmet") or lower:find("vest") or lower:find("shield") then
+        return Color3.fromRGB(85, 170, 255)
+    elseif lower:find("card") or lower:find("key") or lower:find("gold") or lower:find("chip") or lower:find("coin") or lower:find("cash") then
+        return Color3.fromRGB(220, 100, 255)
+    end
+    return Color3.fromRGB(255, 255, 150)
+end
+
+local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
+    if not targetInstance then return end
+
+    local adorneePart = nil
+    if targetInstance:IsA("BasePart") then
+        adorneePart = targetInstance
+    elseif targetInstance:IsA("Model") then
+        adorneePart = targetInstance.PrimaryPart or targetInstance:FindFirstChildOfClass("BasePart") or targetInstance:FindFirstChild("Chips", true)
+    end
+
+    if not adorneePart then return end
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local distanceText = ""
+    if hrp then
+        local dist = math.floor((hrp.Position - adorneePart.Position).Magnitude)
+        distanceText = string.format(" [%dm]", dist)
+    end
+
+    local displayName = (customName or targetInstance.Name) .. distanceText
+
+    local existingGui = adorneePart:FindFirstChild(espTag)
+    if existingGui then
+        local label = existingGui:FindFirstChildOfClass("TextLabel")
+        if label then
+            label.Text = displayName
+        end
+        return
+    end
+
+    local gui = Instance.new("BillboardGui")
+    gui.Name = espTag
+    gui.Adornee = adorneePart
+    gui.Size = UDim2.new(0, 200, 0, 40)
+    gui.StudsOffset = Vector3.new(0, 2, 0)
+    gui.AlwaysOnTop = true
+    gui.Parent = adorneePart
+
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 6, 0, 6)
+    dot.Position = UDim2.new(0.5, -3, 0.5, -3)
+    dot.BackgroundColor3 = color or Color3.fromRGB(255, 255, 255)
+    dot.BorderSizePixel = 0
+    dot.Parent = gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = dot
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 18)
+    label.Position = UDim2.new(0, 0, 0, -18)
+    label.BackgroundTransparency = 1
+    label.Text = displayName
+    label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    label.TextSize = 12
+    label.Font = Enum.Font.SourceSansBold
+    label.Parent = gui
+end
+
+local function RemoveDotESP(parentFolder, espTag)
+    if not parentFolder then return end
+    for _, item in ipairs(parentFolder:GetChildren()) do
+        for _, desc in ipairs(item:GetDescendants()) do
+            if desc:IsA("BillboardGui") and desc.Name == espTag then
+                desc:Destroy()
+            end
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- ESP TAB CONTROLS
+--------------------------------------------------------------------------------
+ESPTab:CreateToggle({
+    Name = "Zombie ESP (Name + Red Dot)",
+    CurrentValue = false,
+    Flag = "ZombieESPToggle",
+    Callback = function(Value)
+        ESPZombieEnabled = Value
+        if not ESPZombieEnabled then
+            local charsFolder = workspace:FindFirstChild("Characters")
+            RemoveDotESP(charsFolder, "ZombieDotESP")
+        else
+            task.spawn(function()
+                while ESPZombieEnabled do
+                    local charsFolder = workspace:FindFirstChild("Characters")
+                    if charsFolder then
+                        for _, char in ipairs(charsFolder:GetChildren()) do
+                            if isZombieEnemy(char) and canBeDamaged(char) then
+                                CreateOrUpdateDotESP(char, "ZombieDotESP", char.Name, Color3.fromRGB(255, 50, 50))
+                            end
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Survivor ESP (Name + Green Dot)",
+    CurrentValue = false,
+    Flag = "SurvivorESPToggle",
+    Callback = function(Value)
+        ESPSurvivorEnabled = Value
+        if not ESPSurvivorEnabled then
+            local survivorsFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Survivors")
+            RemoveDotESP(survivorsFolder, "SurvivorDotESP")
+        else
+            task.spawn(function()
+                while ESPSurvivorEnabled do
+                    local survivorsFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Survivors")
+                    if survivorsFolder then
+                        for _, survivor in ipairs(survivorsFolder:GetChildren()) do
+                            CreateOrUpdateDotESP(survivor, "SurvivorDotESP", survivor.Name, Color3.fromRGB(0, 255, 128))
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Selected Item ESP (Name + Color Coded)",
+    CurrentValue = false,
+    Flag = "SelectedItemESPToggle",
+    Callback = function(Value)
+        ESPSelectedItemEnabled = Value
+        if not ESPSelectedItemEnabled then
+            local droppedFolder = workspace:FindFirstChild("DroppedItems")
+            RemoveDotESP(droppedFolder, "SelectedItemESP")
+        else
+            task.spawn(function()
+                while ESPSelectedItemEnabled do
+                    local droppedFolder = workspace:FindFirstChild("DroppedItems")
+                    if droppedFolder then
+                        for _, item in ipairs(droppedFolder:GetChildren()) do
+                            if SelectedItemName and item.Name == SelectedItemName then
+                                local col = GetItemTypeColor(item.Name)
+                                CreateOrUpdateDotESP(item, "SelectedItemESP", "[Target] " .. item.Name, col)
+                            else
+                                for _, desc in ipairs(item:GetDescendants()) do
+                                    if desc:IsA("BillboardGui") and desc.Name == "SelectedItemESP" then
+                                        desc:Destroy()
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "All Dropped Items ESP (Name + Color Coded)",
+    CurrentValue = false,
+    Flag = "AllItemsESPToggle",
+    Callback = function(Value)
+        ESPAllItemsEnabled = Value
+        if not ESPAllItemsEnabled then
+            local droppedFolder = workspace:FindFirstChild("DroppedItems")
+            RemoveDotESP(droppedFolder, "AllItemESP")
+        else
+            task.spawn(function()
+                while ESPAllItemsEnabled do
+                    local droppedFolder = workspace:FindFirstChild("DroppedItems")
+                    if droppedFolder then
+                        for _, item in ipairs(droppedFolder:GetChildren()) do
+                            local col = GetItemTypeColor(item.Name)
+                            CreateOrUpdateDotESP(item, "AllItemESP", item.Name, col)
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Selected Crate ESP (Name + Orange Dot)",
+    CurrentValue = false,
+    Flag = "SelectedCrateESPToggle",
+    Callback = function(Value)
+        ESPSelectedCrateEnabled = Value
+        if not ESPSelectedCrateEnabled then
+            local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+            RemoveDotESP(cratesFolder, "SelectedCrateESP")
+        else
+            task.spawn(function()
+                while ESPSelectedCrateEnabled do
+                    local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+                    if cratesFolder and SelectedCrateName and SelectedCrateName ~= "No crates found" then
+                        local crateIndex = tonumber(SelectedCrateName:match("%[(%d+)%]"))
+                        if crateIndex then
+                            local targetCrate = cratesFolder:GetChildren()[crateIndex]
+                            if targetCrate then
+                                CreateOrUpdateDotESP(targetCrate, "SelectedCrateESP", "[Target Crate] " .. targetCrate.Name, Color3.fromRGB(255, 170, 0))
+                            end
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "All Crates / Chests ESP (Name + Gold Dot)",
+    CurrentValue = false,
+    Flag = "CratesESPToggle",
+    Callback = function(Value)
+        ESPCratesEnabled = Value
+        if not ESPCratesEnabled then
+            local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+            RemoveDotESP(cratesFolder, "CrateESP")
+        else
+            task.spawn(function()
+                while ESPCratesEnabled do
+                    local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+                    if cratesFolder then
+                        for _, crate in ipairs(cratesFolder:GetChildren()) do
+                            CreateOrUpdateDotESP(crate, "CrateESP", crate.Name, Color3.fromRGB(255, 215, 0))
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Airdrop / Supply Crate ESP (Name + Cyan Dot)",
+    CurrentValue = false,
+    Flag = "AirdropESPToggle",
+    Callback = function(Value)
+        ESPAirdropEnabled = Value
+        if not ESPAirdropEnabled then
+            local specialFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Special")
+            RemoveDotESP(specialFolder, "AirdropESP")
+        else
+            task.spawn(function()
+                while ESPAirdropEnabled do
+                    local specialFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Special")
+                    if specialFolder then
+                        local supplyCrate = specialFolder:FindFirstChild("Supply Crate")
+                        if supplyCrate then
+                            CreateOrUpdateDotESP(supplyCrate, "AirdropESP", "Airdrop Supply Crate", Color3.fromRGB(0, 255, 255))
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end)
+        end
+    end,
+})
+
+--------------------------------------------------------------------------------
+-- INPUT & RUNSERVICE LISTENERS FOR ZOMBIE AIMLOCK
+--------------------------------------------------------------------------------
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if Settings.AimlockEnabled and input.UserInputType == Settings.Keybind then
+        isAiming = true
+        lockedTarget = getClosestZombie()
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Settings.Keybind then
+        isAiming = false
+        lockedTarget = nil
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    local mousePos = UserInputService:GetMouseLocation()
+
+    -- Update FOV Circle
+    if FOVCircle then
+        FOVCircle.Position = mousePos
+        FOVCircle.Radius = Settings.FOVSize
+        FOVCircle.Visible = Settings.ShowFOV and Settings.AimlockEnabled
+    end
+
+    if not Settings.AimlockEnabled or not isAiming or not UserInputService:IsMouseButtonPressed(Settings.Keybind) then
+        lockedTarget = nil
+        return
+    end
+
+    -- Aimlock Processing
+    if lockedTarget and lockedTarget.Parent and canBeDamaged(lockedTarget.Parent) then
+        local humanoid = lockedTarget.Parent:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            local targetScreenPos, onScreen = Camera:WorldToViewportPoint(lockedTarget.Position)
+
+            if onScreen then
+                if Settings.AimMethod == "MouseRel" and mousemoverel then
+                    local deltaX = (targetScreenPos.X - mousePos.X) * Settings.Smoothness
+                    local deltaY = (targetScreenPos.Y - mousePos.Y) * Settings.Smoothness
+                    mousemoverel(deltaX, deltaY)
+                else
+                    local currentCFrame = Camera.CFrame
+                    local targetCFrame = CFrame.new(currentCFrame.Position, lockedTarget.Position)
+                    Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.Smoothness)
+                end
+            end
+        else
+            lockedTarget = nil
+        end
+    else
+        lockedTarget = nil
+    end
+end)
