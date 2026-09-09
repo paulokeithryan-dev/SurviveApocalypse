@@ -9,9 +9,9 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- Create Window with Auto-Save Enabled & Notifications Disabled
+-- Create Window
 local Window = Rayfield:CreateWindow({
-    Name = "Zombie Aimlock & Utility Hub",
+    Name = "Zombie Aimlock & Remote Exploits Hub",
     LoadingTitle = "Loading Script...",
     LoadingSubtitle = "Rayfield UI",
     DisableRayfieldPrompts = true,
@@ -35,10 +35,13 @@ local ESPTab = Window:CreateTab("ESP", "eye")
 local MiscTab = Window:CreateTab("Misc", "settings")
 
 --------------------------------------------------------------------------------
--- AIMLOCK CONFIGURATION & STATE
+-- CONFIGURATION & STATE
 --------------------------------------------------------------------------------
 local Settings = {
     AimlockEnabled = true,
+    SilentAimEnabled = false,
+    KillAuraEnabled = false,
+    KillAuraRange = 20,
     Keybind = Enum.UserInputType.MouseButton2,
     CheckDamageable = true,
     TargetMode = "Distance",
@@ -67,7 +70,7 @@ if Drawing and Drawing.new then
 end
 
 ----------------------------------------------------
--- AIMLOCK HELPER & VERIFICATION FUNCTIONS
+-- HELPER & TARGET VERIFICATION FUNCTIONS
 ----------------------------------------------------
 local function canBeDamaged(character)
     if not character then return false end
@@ -78,7 +81,6 @@ local function canBeDamaged(character)
         if character:FindFirstChildOfClass("ForceField") or character:FindFirstChild("ForceField") then
             return false
         end
-
         if character:GetAttribute("IsInvulnerable") == true 
            or character:GetAttribute("Invulnerable") == true 
            or character:GetAttribute("SafeZone") == true 
@@ -86,47 +88,25 @@ local function canBeDamaged(character)
            or character:GetAttribute("GodMode") == true then
             return false
         end
-
-        local invulnValChar = character:FindFirstChild("IsInvulnerable") or character:FindFirstChild("GodMode") or character:FindFirstChild("Invulnerable")
-        if invulnValChar and invulnValChar:IsA("ValueBase") and invulnValChar.Value == true then
-            return false
-        end
     end
-
     return true
 end
 
 local function isPlayerCharacter(character)
     if not character then return false end
     if Players:GetPlayerFromCharacter(character) then return true end
-
-    if character:GetAttribute("IsPlayer") == true 
-       or character:GetAttribute("Player") == true 
-       or character:GetAttribute("IsHuman") == true then
-        return true
-    end
-
-    if character:FindFirstChild("IsPlayer") or character:FindFirstChild("Player") then
-        return true
-    end
-
+    if character:GetAttribute("IsPlayer") == true or character:FindFirstChild("IsPlayer") then return true end
     return false
 end
 
 local function isZombieEnemy(character)
-    if not character then return false end
-    if character == LocalPlayer.Character then return false end
-
-    if Settings.IgnorePlayers and isPlayerCharacter(character) then
-        return false
-    end
-
+    if not character or character == LocalPlayer.Character then return false end
+    if Settings.IgnorePlayers and isPlayerCharacter(character) then return false end
     return true
 end
 
 local function getTargetPart(character)
     if not character or not canBeDamaged(character) then return nil end
-
     return character:FindFirstChild("Head") 
         or character:FindFirstChild("UpperTorso") 
         or character:FindFirstChild("Torso") 
@@ -157,10 +137,8 @@ local function getClosestZombie()
                 local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
                 if onScreen then
                     local cursorDistance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                    
                     if cursorDistance <= Settings.FOVSize then
                         local worldDistance = (part.Position - myPos).Magnitude
-                        
                         if Settings.MaxDistance == 0 or worldDistance <= Settings.MaxDistance then
                             if Settings.TargetMode == "Distance" then
                                 if worldDistance < shortestMetric then
@@ -183,6 +161,37 @@ local function getClosestZombie()
 end
 
 --------------------------------------------------------------------------------
+-- REMOTE HOOKING (SILENT AIM ENGINE)
+--------------------------------------------------------------------------------
+local mtHook; mtHook = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+
+    if Settings.SilentAimEnabled and method == "FireServer" and self.Name == "Shoot" then
+        local targetPart = getClosestZombie()
+        if targetPart and targetPart.Parent then
+            local head = targetPart.Parent:FindFirstChild("Head") or targetPart
+            
+            -- Modify hit packet structure based on intercepted format
+            if typeof(args[2]) == "table" and args[2][1] then
+                args[2][1].Target = head.Position
+                if args[2][1].HitData and args[2][1].HitData[1] then
+                    args[2][1].HitData[1].HitChar = targetPart.Parent
+                    args[2][1].HitData[1].HitPart = head
+                    args[2][1].HitData[1].HitPos = head.Position
+                end
+                if args[2][1].EffectResults and args[2][1].EffectResults[1] then
+                    args[2][1].EffectResults[1].End = head.Position
+                end
+            end
+            return mtHook(self, unpack(args))
+        end
+    end
+
+    return mtHook(self, ...)
+end)
+
+--------------------------------------------------------------------------------
 -- COMBAT TAB CONTROLS
 --------------------------------------------------------------------------------
 CombatTab:CreateToggle({
@@ -194,109 +203,65 @@ CombatTab:CreateToggle({
     end,
 })
 
--- INSTANT RELOAD SYSTEM
+CombatTab:CreateToggle({
+    Name = "Silent Aim (Remote Redirection)",
+    CurrentValue = false,
+    Flag = "SilentAimToggle",
+    Callback = function(Value)
+        Settings.SilentAimEnabled = Value
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Melee Kill Aura",
+    CurrentValue = false,
+    Flag = "KillAuraToggle",
+    Callback = function(Value)
+        Settings.KillAuraEnabled = Value
+    end,
+})
+
+CombatTab:CreateSlider({
+    Name = "Kill Aura Range (Studs)",
+    Range = {5, 50},
+    Increment = 1,
+    CurrentValue = 20,
+    Flag = "KillAuraRangeSlider",
+    Callback = function(Value)
+        Settings.KillAuraRange = Value
+    end,
+})
+
+-- INSTANT RELOAD & AMMO SYNC
 local InstantReloadEnabled = false
 
-local function ApplyInstantReload(tool)
+local function TriggerRemoteReload(tool)
     if not tool or not tool:IsA("Tool") then return end
     
-    -- Zero out reload attributes
-    for _, attr in ipairs({"ReloadTime", "ReloadDuration", "ReloadSpeed", "ReloadDelay", "Cooldown"}) do
-        if tool:GetAttribute(attr) ~= nil then
-            tool:SetAttribute(attr, 0)
-        end
+    local reloadRemote = tool:FindFirstChild("Reload")
+    local syncAmmoRemote = tool:FindFirstChild("SyncAmmo")
+
+    if reloadRemote and reloadRemote:IsA("RemoteFunction") then
+        task.spawn(function()
+            pcall(function() reloadRemote:InvokeServer() end)
+        end)
     end
 
-    -- Zero out Value instances inside the tool
-    for _, desc in ipairs(tool:GetDescendants()) do
-        if desc:IsA("ValueBase") then
-            local name = desc.Name:lower()
-            if name:find("reloadtime") or name:find("reloaddelay") or name:find("reloadspeed") then
-                if desc:IsA("NumberValue") or desc:IsA("IntValue") then
-                    desc.Value = 0
-                end
-            elseif name:find("reloading") and desc:IsA("BoolValue") then
-                desc.Value = false
-            end
-        end
-    end
-end
-
-local function ProcessAllTools()
-    local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") then ApplyInstantReload(item) end
-        end
-    end
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    if backpack then
-        for _, item in ipairs(backpack:GetChildren()) do
-            if item:IsA("Tool") then ApplyInstantReload(item) end
-        end
+    if syncAmmoRemote and syncAmmoRemote:IsA("RemoteEvent") then
+        task.spawn(function()
+            pcall(function() syncAmmoRemote:FireServer() end)
+        end)
     end
 end
 
 CombatTab:CreateToggle({
-    Name = "Instant Reload",
+    Name = "Instant Reload & Sync",
     CurrentValue = false,
     Flag = "InstantReloadToggle",
     Callback = function(Value)
         InstantReloadEnabled = Value
-        if InstantReloadEnabled then
-            ProcessAllTools()
-        end
     end,
 })
-
--- Listen for new tools added to backpack or character
-local function HookToolListeners(container)
-    if not container then return end
-    container.ChildAdded:Connect(function(child)
-        if InstantReloadEnabled and child:IsA("Tool") then
-            task.wait(0.05)
-            ApplyInstantReload(child)
-        end
-    end)
-end
-
-if LocalPlayer:FindFirstChildOfClass("Backpack") then
-    HookToolListeners(LocalPlayer:FindFirstChildOfClass("Backpack"))
-end
-
-LocalPlayer.CharacterAdded:Connect(function(char)
-    HookToolListeners(char)
-    local backpack = LocalPlayer:WaitForChild("Backpack", 5)
-    if backpack then HookToolListeners(backpack) end
-    
-    -- Speed up reload animations on humanoid
-    local hum = char:WaitForChild("Humanoid", 5)
-    if hum then
-        hum.AnimationPlayed:Connect(function(track)
-            if InstantReloadEnabled and track.Animation then
-                local animName = track.Animation.Name:lower()
-                if animName:find("reload") then
-                    track:AdjustSpeed(100)
-                end
-            end
-        end)
-    end
-end)
-
-if LocalPlayer.Character then
-    HookToolListeners(LocalPlayer.Character)
-    local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-    if hum then
-        hum.AnimationPlayed:Connect(function(track)
-            if InstantReloadEnabled and track.Animation then
-                local animName = track.Animation.Name:lower()
-                if animName:find("reload") then
-                    track:AdjustSpeed(100)
-                end
-            end
-        end)
-    end
-end
 
 CombatTab:CreateDropdown({
     Name = "Target Mode",
@@ -353,810 +318,81 @@ CombatTab:CreateToggle({
     end,
 })
 
-CombatTab:CreateToggle({
-    Name = "Ignore Human Players",
-    CurrentValue = true,
-    Flag = "IgnorePlayersToggle",
-    Callback = function(Value)
-        Settings.IgnorePlayers = Value
-    end,
-})
-
-CombatTab:CreateToggle({
-    Name = "Check Damageable / SafeZones",
-    CurrentValue = true,
-    Flag = "CheckDamageableToggle",
-    Callback = function(Value)
-        Settings.CheckDamageable = Value
-    end,
-})
-
-CombatTab:CreateSlider({
-    Name = "Max Lock Distance (Studs)",
-    Range = {0, 1000},
-    Increment = 25,
-    CurrentValue = 500,
-    Flag = "MaxDistanceSlider",
-    Callback = function(Value)
-        Settings.MaxDistance = Value
-    end,
-})
-
 --------------------------------------------------------------------------------
--- ITEMS TAB
+-- RUNTIME LOOPS (KILL AURA, AIMLOCK, AUTO TARGET)
 --------------------------------------------------------------------------------
-local SelectedItemName = nil
-
-local function GetGroupedItemNames()
-    local counts = {}
-    local droppedFolder = Workspace:FindFirstChild("DroppedItems")
-    if droppedFolder then
-        for _, item in ipairs(droppedFolder:GetChildren()) do
-            counts[item.Name] = (counts[item.Name] or 0) + 1
-        end
-    end
-
-    local options = {}
-    for name, count in pairs(counts) do
-        table.insert(options, string.format("%s x%d", name, count))
-    end
-
-    if #options == 0 then
-        table.insert(options, "No items found")
-    else
-        table.sort(options)
-    end
-    return options
-end
-
-local ItemDropdown = ItemsTab:CreateDropdown({
-    Name = "Select Target Item",
-    Options = GetGroupedItemNames(),
-    CurrentOption = {"No items found"},
-    MultipleOptions = false,
-    Flag = "ItemDropdown",
-    Callback = function(Options)
-        local rawOption = type(Options) == "table" and Options[1] or Options
-        if rawOption and rawOption ~= "No items found" then
-            SelectedItemName = rawOption:match("^(.-)%s*x%d+$") or rawOption
-        else
-            SelectedItemName = nil
-        end
-    end,
-})
-
+-- Melee Kill Aura Loop
 task.spawn(function()
-    local lastSerialized = ""
-    while task.wait(1) do
-        local currentOptions = GetGroupedItemNames()
-        local currentSerialized = table.concat(currentOptions, "|")
-        if currentSerialized ~= lastSerialized then
-            lastSerialized = currentSerialized
-            ItemDropdown:Refresh(currentOptions)
-        end
-    end
-end)
-
---------------------------------------------------------------------------------
--- BACKPACK TAB
---------------------------------------------------------------------------------
-local SelectedBackpackItem = nil
-
-local function GetBackpackStorageItems()
-    local counts = {}
-    local storage = ReplicatedStorage:FindFirstChild("BackpackStorage")
-    if storage then
-        for _, item in ipairs(storage:GetChildren()) do
-            counts[item.Name] = (counts[item.Name] or 0) + 1
-        end
-    end
-
-    local options = {}
-    for name, count in pairs(counts) do
-        table.insert(options, string.format("%s x%d", name, count))
-    end
-
-    if #options == 0 then
-        table.insert(options, "No storage items found")
-    else
-        table.sort(options)
-    end
-    return options
-end
-
-local BackpackDropdown = BackpackTab:CreateDropdown({
-    Name = "Select Storage Item",
-    Options = GetBackpackStorageItems(),
-    CurrentOption = {"No storage items found"},
-    MultipleOptions = false,
-    Flag = "BackpackStorageDropdown",
-    Callback = function(Options)
-        local rawOption = type(Options) == "table" and Options[1] or Options
-        if rawOption and rawOption ~= "No storage items found" then
-            SelectedBackpackItem = rawOption:match("^(.-)%s*x%d+$") or rawOption
-        else
-            SelectedBackpackItem = nil
-        end
-    end,
-})
-
-task.spawn(function()
-    local lastSerialized = ""
-    while task.wait(1) do
-        local currentOptions = GetBackpackStorageItems()
-        local currentSerialized = table.concat(currentOptions, "|")
-        if currentSerialized ~= lastSerialized then
-            lastSerialized = currentSerialized
-            BackpackDropdown:Refresh(currentOptions)
-        end
-    end
-end)
-
---------------------------------------------------------------------------------
--- CRATES TAB
---------------------------------------------------------------------------------
-local SelectedCrateName = nil
-
-local function GetCrateNames()
-    local names = {}
-    local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
-    if cratesFolder then
-        for index, crate in ipairs(cratesFolder:GetChildren()) do
-            table.insert(names, string.format("[%d] %s", index, crate.Name))
-        end
-    end
-    if #names == 0 then table.insert(names, "No crates found") end
-    return names
-end
-
-local CrateDropdown = CratesTab:CreateDropdown({
-    Name = "Select Crate / Chest",
-    Options = GetCrateNames(),
-    CurrentOption = {"No crates found"},
-    MultipleOptions = false,
-    Flag = "CrateDropdown",
-    Callback = function(Options)
-        SelectedCrateName = type(Options) == "table" and Options[1] or Options
-    end,
-})
-
-CratesTab:CreateButton({
-    Name = "Refresh Crate List",
-    Callback = function()
-        CrateDropdown:Refresh(GetCrateNames())
-    end,
-})
-
---------------------------------------------------------------------------------
--- MOVEMENT TAB
---------------------------------------------------------------------------------
-MovementTab:CreateSlider({
-    Name = "WalkSpeed Multiplier",
-    Range = {16, 120},
-    Increment = 2,
-    CurrentValue = 16,
-    Flag = "SpeedSlider",
-    Callback = function(Value)
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = Value
-        end
-    end,
-})
-
---------------------------------------------------------------------------------
--- MISC TAB (Instant Prompts, Noclip, Remove Fog, Fullbright, Zoom, Low Graphics)
---------------------------------------------------------------------------------
--- INSTANT PROXIMITY PROMPTS
-local InstantPromptsEnabled = false
-local PromptConnection = nil
-local originalHoldDurations = {}
-
-local function makeInstant(prompt)
-    if prompt:IsA("ProximityPrompt") then
-        if originalHoldDurations[prompt] == nil then
-            originalHoldDurations[prompt] = prompt.HoldDuration
-        end
-        prompt.HoldDuration = 0
-    end
-end
-
-MiscTab:CreateToggle({
-    Name = "Instant Proximity Prompts",
-    CurrentValue = false,
-    Flag = "InstantPromptsToggle",
-    Callback = function(Value)
-        InstantPromptsEnabled = Value
-        if InstantPromptsEnabled then
-            for _, descendant in ipairs(Workspace:GetDescendants()) do
-                makeInstant(descendant)
-            end
-            if not PromptConnection then
-                PromptConnection = Workspace.DescendantAdded:Connect(function(descendant)
-                    if InstantPromptsEnabled then
-                        makeInstant(descendant)
-                    end
-                end)
-            end
-        else
-            if PromptConnection then
-                PromptConnection:Disconnect()
-                PromptConnection = nil
-            end
-            for prompt, origDuration in pairs(originalHoldDurations) do
-                if prompt and prompt.Parent then
-                    prompt.HoldDuration = origDuration
-                end
-            end
-        end
-    end,
-})
-
--- NOCLIP
-local NoclipEnabled = false
-local NoclipConnection = nil
-
-MiscTab:CreateToggle({
-    Name = "Noclip (Walk Through Walls)",
-    CurrentValue = false,
-    Flag = "NoclipToggle",
-    Callback = function(Value)
-        NoclipEnabled = Value
-        if NoclipEnabled then
-            if not NoclipConnection then
-                NoclipConnection = RunService.Stepped:Connect(function()
-                    local char = LocalPlayer.Character
-                    if char then
-                        for _, part in ipairs(char:GetDescendants()) do
-                            if part:IsA("BasePart") then
-                                part.CanCollide = false
-                            end
-                        end
-                    end
-                end)
-            end
-        else
-            if NoclipConnection then
-                NoclipConnection:Disconnect()
-                NoclipConnection = nil
-            end
-        end
-    end,
-})
-
--- REMOVE FOG
-local RemoveFogEnabled = false
-local FogConnection = nil
-
-MiscTab:CreateToggle({
-    Name = "Remove Fog",
-    CurrentValue = false,
-    Flag = "RemoveFogToggle",
-    Callback = function(Value)
-        RemoveFogEnabled = Value
-        local lighting = game:GetService("Lighting")
-        if RemoveFogEnabled then
-            lighting.FogEnd = 9e9
-            local atmosphere = lighting:FindFirstChildOfClass("Atmosphere")
-            if atmosphere then
-                atmosphere.Density = 0
-            end
-            FogConnection = RunService.RenderStepped:Connect(function()
-                lighting.FogEnd = 9e9
-                if atmosphere then
-                    atmosphere.Density = 0
-                end
-            end)
-        else
-            if FogConnection then
-                FogConnection:Disconnect()
-                FogConnection = nil
-            end
-            lighting.FogEnd = 1000
-            local atmosphere = lighting:FindFirstChildOfClass("Atmosphere")
-            if atmosphere then
-                atmosphere.Density = 0.3
-            end
-        end
-    end,
-})
-
--- FULLBRIGHT
-local FullbrightEnabled = false
-local FullbrightConnection = nil
-
-MiscTab:CreateToggle({
-    Name = "Fullbright",
-    CurrentValue = false,
-    Flag = "FullbrightToggle",
-    Callback = function(Value)
-        FullbrightEnabled = Value
-        local lighting = game:GetService("Lighting")
-        if FullbrightEnabled then
-            lighting.Brightness = 2
-            lighting.ClockTime = 14
-            lighting.GlobalShadows = false
-            lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
-            FullbrightConnection = RunService.RenderStepped:Connect(function()
-                lighting.Brightness = 2
-                lighting.ClockTime = 14
-                lighting.GlobalShadows = false
-                lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
-            end)
-        else
-            if FullbrightConnection then
-                FullbrightConnection:Disconnect()
-                FullbrightConnection = nil
-            end
-            lighting.Brightness = 1
-            lighting.GlobalShadows = true
-            lighting.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
-        end
-    end,
-})
-
--- INFINITE ZOOM OUT
-local InfiniteZoomEnabled = false
-local ZoomConnection = nil
-
-MiscTab:CreateToggle({
-    Name = "Infinite Zoom Out",
-    CurrentValue = false,
-    Flag = "InfiniteZoomToggle",
-    Callback = function(Value)
-        InfiniteZoomEnabled = Value
-        if InfiniteZoomEnabled then
-            LocalPlayer.CameraMaxZoomDistance = 99999
-            ZoomConnection = RunService.RenderStepped:Connect(function()
-                if LocalPlayer.CameraMaxZoomDistance ~= 99999 then
-                    LocalPlayer.CameraMaxZoomDistance = 99999
-                end
-            end)
-        else
-            if ZoomConnection then
-                ZoomConnection:Disconnect()
-                ZoomConnection = nil
-            end
-            LocalPlayer.CameraMaxZoomDistance = 128
-        end
-    end,
-})
-
--- LOW GRAPHICS (SMOOTH PLASTIC)
-local LowGraphicsEnabled = false
-
-local function ApplyLowGraphics(inst)
-    if inst:IsA("BasePart") then
-        inst.Material = Enum.Material.SmoothPlastic
-        inst.Reflectance = 0
-    elseif inst:IsA("Decal") or inst:IsA("Texture") then
-        inst.Transparency = 1
-    elseif inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
-        inst.Enabled = false
-    end
-end
-
-MiscTab:CreateToggle({
-    Name = "Low Graphics (Smooth Plastic)",
-    CurrentValue = false,
-    Flag = "LowGraphicsToggle",
-    Callback = function(Value)
-        LowGraphicsEnabled = Value
-        if LowGraphicsEnabled then
-            local lighting = game:GetService("Lighting")
-            lighting.GlobalShadows = false
+    while task.wait(0.1) do
+        if Settings.KillAuraEnabled and LocalPlayer.Character then
+            local char = LocalPlayer.Character
+            local tool = char:FindFirstChildOfClass("Tool")
             
-            for _, v in ipairs(lighting:GetChildren()) do
-                if v:IsA("PostEffect") or v:IsA("BlurEffect") or v:IsA("SunRaysEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") then
-                    v.Enabled = false
-                end
-            end
+            if tool then
+                local swingRemote = tool:FindFirstChild("Swing")
+                local hitRemote = tool:FindFirstChild("HitTargets")
 
-            for _, desc in ipairs(Workspace:GetDescendants()) do
-                ApplyLowGraphics(desc)
-            end
-
-            if Workspace.Terrain then
-                Workspace.Terrain.WaterWaveSize = 0
-                Workspace.Terrain.WaterWaveSpeed = 0
-                Workspace.Terrain.WaterReflectance = 0
-                Workspace.Terrain.WaterTransparency = 0
-            end
-        end
-    end,
-})
-
-Workspace.DescendantAdded:Connect(function(desc)
-    if LowGraphicsEnabled then
-        task.wait()
-        ApplyLowGraphics(desc)
-    end
-end)
-
---------------------------------------------------------------------------------
--- ESP ENGINE & CONFIG
---------------------------------------------------------------------------------
-local ESPConfig = {
-    ShowNames = true,
-    ShowDistance = true
-}
-
-local ESPZombieEnabled = false
-local ESPSurvivorEnabled = false
-local ESPPlayerEnabled = false
-local ESPSelectedItemEnabled = false
-local ESPAllItemsEnabled = false
-local ESPSelectedCrateEnabled = false
-local ESPCratesEnabled = false
-local ESPAirdropEnabled = false
-
-local function GetItemTypeColor(itemName)
-    local lower = itemName:lower()
-    if lower:find("gun") or lower:find("rifle") or lower:find("pistol") or lower:find("ammo") or lower:find("weapon") or lower:find("shotgun") or lower:find("smg") then
-        return Color3.fromRGB(255, 85, 85)
-    elseif lower:find("med") or lower:find("bandage") or lower:find("heal") or lower:find("food") or lower:find("drink") or lower:find("blood") then
-        return Color3.fromRGB(85, 255, 85)
-    elseif lower:find("armor") or lower:find("helmet") or lower:find("vest") or lower:find("shield") then
-        return Color3.fromRGB(85, 170, 255)
-    elseif lower:find("card") or lower:find("key") or lower:find("gold") or lower:find("chip") or lower:find("coin") or lower:find("cash") then
-        return Color3.fromRGB(220, 100, 255)
-    end
-    return Color3.fromRGB(255, 255, 150)
-end
-
-local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
-    if not targetInstance then return end
-
-    local adorneePart = nil
-    if targetInstance:IsA("BasePart") then
-        adorneePart = targetInstance
-    elseif targetInstance:IsA("Model") then
-        adorneePart = targetInstance.PrimaryPart 
-            or targetInstance:FindFirstChild("Head")
-            or targetInstance:FindFirstChild("HumanoidRootPart")
-            or targetInstance:FindFirstChildOfClass("BasePart")
-    end
-
-    if not adorneePart then return end
-
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    
-    local distanceText = ""
-    if hrp and ESPConfig.ShowDistance then
-        local dist = math.floor((hrp.Position - adorneePart.Position).Magnitude)
-        distanceText = string.format(" [%dm]", dist)
-    end
-
-    local baseName = customName or targetInstance.Name
-    local displayName = ""
-    
-    if ESPConfig.ShowNames and ESPConfig.ShowDistance then
-        displayName = baseName .. distanceText
-    elseif ESPConfig.ShowNames then
-        displayName = baseName
-    elseif ESPConfig.ShowDistance then
-        displayName = distanceText:gsub("^%s*", "")
-    else
-        displayName = ""
-    end
-
-    local existingGui = adorneePart:FindFirstChild(espTag)
-    if existingGui then
-        local label = existingGui:FindFirstChildOfClass("TextLabel")
-        if label then
-            label.Text = displayName
-            label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
-            label.Visible = (displayName ~= "")
-        end
-        return
-    end
-
-    local gui = Instance.new("BillboardGui")
-    gui.Name = espTag
-    gui.Adornee = adorneePart
-    gui.Size = UDim2.new(0, 200, 0, 30)
-    gui.StudsOffset = Vector3.new(0, 2.5, 0)
-    gui.AlwaysOnTop = true
-    gui.LightInfluence = 0
-    gui.Parent = adorneePart
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.Position = UDim2.new(0, 0, 0, 0)
-    label.BackgroundTransparency = 1
-    label.Text = displayName
-    label.Visible = (displayName ~= "")
-    label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
-    label.TextStrokeTransparency = 0
-    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    label.TextSize = 14
-    label.Font = Enum.Font.SourceSansBold
-    label.TextXAlignment = Enum.TextXAlignment.Center
-    label.TextYAlignment = Enum.TextYAlignment.Center
-    label.Parent = gui
-end
-
-local function RemoveDotESP(parentFolder, espTag)
-    if not parentFolder then return end
-    for _, item in ipairs(parentFolder:GetChildren()) do
-        for _, desc in ipairs(item:GetDescendants()) do
-            if desc:IsA("BillboardGui") and desc.Name == espTag then
-                desc:Destroy()
-            end
-        end
-    end
-end
-
---------------------------------------------------------------------------------
--- ESP TAB CONTROLS
---------------------------------------------------------------------------------
-ESPTab:CreateToggle({
-    Name = "Show Names in ESP",
-    CurrentValue = true,
-    Flag = "ShowNamesToggle",
-    Callback = function(Value)
-        ESPConfig.ShowNames = Value
-    end,
-})
-
-ESPTab:CreateToggle({
-    Name = "Show Distance in ESP",
-    CurrentValue = true,
-    Flag = "ShowDistanceToggle",
-    Callback = function(Value)
-        ESPConfig.ShowDistance = Value
-    end,
-})
-
-ESPTab:CreateToggle({
-    Name = "Zombie ESP",
-    CurrentValue = false,
-    Flag = "ZombieESPToggle",
-    Callback = function(Value)
-        ESPZombieEnabled = Value
-        if not ESPZombieEnabled then
-            local charsFolder = Workspace:FindFirstChild("Characters")
-            RemoveDotESP(charsFolder, "ZombieDotESP")
-        else
-            task.spawn(function()
-                while ESPZombieEnabled do
+                if swingRemote and hitRemote then
+                    local myPos = getLocalRootPosition()
+                    local targetsToHit = {}
                     local charsFolder = Workspace:FindFirstChild("Characters")
+
                     if charsFolder then
-                        for _, char in ipairs(charsFolder:GetChildren()) do
-                            if isZombieEnemy(char) and canBeDamaged(char) then
-                                CreateOrUpdateDotESP(char, "ZombieDotESP", char.Name, Color3.fromRGB(255, 50, 50))
-                            end
-                        end
-                    end
-                    task.wait(0.2)
-                end
-            end)
-        end
-    end,
-})
-
-ESPTab:CreateToggle({
-    Name = "Player ESP",
-    CurrentValue = false,
-    Flag = "PlayerESPToggle",
-    Callback = function(Value)
-        ESPPlayerEnabled = Value
-        if not ESPPlayerEnabled then
-            for _, plr in ipairs(Players:GetPlayers()) do
-                if plr.Character then
-                    for _, desc in ipairs(plr.Character:GetDescendants()) do
-                        if desc:IsA("BillboardGui") and desc.Name == "PlayerDotESP" then
-                            desc:Destroy()
-                        end
-                    end
-                end
-            end
-        else
-            task.spawn(function()
-                while ESPPlayerEnabled do
-                    for _, plr in ipairs(Players:GetPlayers()) do
-                        if plr ~= LocalPlayer and plr.Character then
-                            CreateOrUpdateDotESP(plr.Character, "PlayerDotESP", plr.Name, Color3.fromRGB(50, 150, 255))
-                        end
-                    end
-                    task.wait(0.2)
-                end
-            end)
-        end
-    end,
-})
-
-ESPTab:CreateToggle({
-    Name = "Survivor ESP",
-    CurrentValue = false,
-    Flag = "SurvivorESPToggle",
-    Callback = function(Value)
-        ESPSurvivorEnabled = Value
-        if not ESPSurvivorEnabled then
-            local survivorsFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Survivors")
-            RemoveDotESP(survivorsFolder, "SurvivorDotESP")
-        else
-            task.spawn(function()
-                while ESPSurvivorEnabled do
-                    local survivorsFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Survivors")
-                    if survivorsFolder then
-                        for _, survivor in ipairs(survivorsFolder:GetChildren()) do
-                            CreateOrUpdateDotESP(survivor, "SurvivorDotESP", survivor.Name, Color3.fromRGB(0, 255, 128))
-                        end
-                    end
-                    task.wait(0.2)
-                end
-            end)
-        end
-    end,
-})
-
-ESPTab:CreateToggle({
-    Name = "Selected Item ESP",
-    CurrentValue = false,
-    Flag = "SelectedItemESPToggle",
-    Callback = function(Value)
-        ESPSelectedItemEnabled = Value
-        if not ESPSelectedItemEnabled then
-            local droppedFolder = Workspace:FindFirstChild("DroppedItems")
-            RemoveDotESP(droppedFolder, "SelectedItemESP")
-        else
-            task.spawn(function()
-                while ESPSelectedItemEnabled do
-                    local droppedFolder = Workspace:FindFirstChild("DroppedItems")
-                    if droppedFolder then
-                        for _, item in ipairs(droppedFolder:GetChildren()) do
-                            if SelectedItemName and item.Name == SelectedItemName then
-                                local col = GetItemTypeColor(item.Name)
-                                CreateOrUpdateDotESP(item, "SelectedItemESP", item.Name, col)
-                            else
-                                for _, desc in ipairs(item:GetDescendants()) do
-                                    if desc:IsA("BillboardGui") and desc.Name == "SelectedItemESP" then
-                                        desc:Destroy()
-                                    end
+                        for _, enemy in ipairs(charsFolder:GetChildren()) do
+                            if isZombieEnemy(enemy) and canBeDamaged(enemy) then
+                                local part = getTargetPart(enemy)
+                                if part and (part.Position - myPos).Magnitude <= Settings.KillAuraRange then
+                                    table.insert(targetsToHit, enemy)
                                 end
                             end
                         end
                     end
-                    task.wait(0.2)
-                end
-            end)
-        end
-    end,
-})
 
-ESPTab:CreateToggle({
-    Name = "All Dropped Items ESP",
-    CurrentValue = false,
-    Flag = "AllItemsESPToggle",
-    Callback = function(Value)
-        ESPAllItemsEnabled = Value
-        if not ESPAllItemsEnabled then
-            local droppedFolder = Workspace:FindFirstChild("DroppedItems")
-            RemoveDotESP(droppedFolder, "AllItemESP")
-        else
-            task.spawn(function()
-                while ESPAllItemsEnabled do
-                    local droppedFolder = Workspace:FindFirstChild("DroppedItems")
-                    if droppedFolder then
-                        for _, item in ipairs(droppedFolder:GetChildren()) do
-                            local col = GetItemTypeColor(item.Name)
-                            CreateOrUpdateDotESP(item, "AllItemESP", item.Name, col)
-                        end
+                    if #targetsToHit > 0 then
+                        swingRemote:FireServer()
+                        hitRemote:FireServer(targetsToHit)
                     end
-                    task.wait(0.2)
                 end
-            end)
+            end
         end
-    end,
-})
+    end
+end)
 
-ESPTab:CreateToggle({
-    Name = "Selected Crate ESP",
-    CurrentValue = false,
-    Flag = "SelectedCrateESPToggle",
-    Callback = function(Value)
-        ESPSelectedCrateEnabled = Value
-        if not ESPSelectedCrateEnabled then
-            local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
-            RemoveDotESP(cratesFolder, "SelectedCrateESP")
-        else
-            task.spawn(function()
-                while ESPSelectedCrateEnabled do
-                    local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
-                    if cratesFolder and SelectedCrateName and SelectedCrateName ~= "No crates found" then
-                        local crateIndex = tonumber(SelectedCrateName:match("%[(%d+)%]"))
-                        if crateIndex then
-                            local targetCrate = cratesFolder:GetChildren()[crateIndex]
-                            if targetCrate then
-                                CreateOrUpdateDotESP(targetCrate, "SelectedCrateESP", targetCrate.Name, Color3.fromRGB(255, 170, 0))
-                            end
-                        end
-                    end
-                    task.wait(0.2)
+-- Auto Target Broadcaster Loop
+task.spawn(function()
+    while task.wait(1) do
+        if LocalPlayer.Character then
+            local autoTarget = LocalPlayer.Character:FindFirstChild("AutoTargetClient")
+            if autoTarget and autoTarget:FindFirstChild("UpdateNearbyTargets") then
+                local charsFolder = Workspace:FindFirstChild("Characters")
+                if charsFolder then
+                    pcall(function()
+                        autoTarget.UpdateNearbyTargets:FireServer(charsFolder:GetChildren())
+                    end)
                 end
-            end)
+            end
         end
-    end,
-})
+    end
+end)
 
-ESPTab:CreateToggle({
-    Name = "All Crates / Chests ESP",
-    CurrentValue = false,
-    Flag = "CratesESPToggle",
-    Callback = function(Value)
-        ESPCratesEnabled = Value
-        if not ESPCratesEnabled then
-            local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
-            RemoveDotESP(cratesFolder, "CrateESP")
-        else
-            task.spawn(function()
-                while ESPCratesEnabled do
-                    local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
-                    if cratesFolder then
-                        for _, crate in ipairs(cratesFolder:GetChildren()) do
-                            CreateOrUpdateDotESP(crate, "CrateESP", crate.Name, Color3.fromRGB(255, 215, 0))
-                        end
-                    end
-                    task.wait(0.2)
-                end
-            end)
-        end
-    end,
-})
-
-ESPTab:CreateToggle({
-    Name = "Airdrop ESP",
-    CurrentValue = false,
-    Flag = "AirdropESPToggle",
-    Callback = function(Value)
-        ESPAirdropEnabled = Value
-        if not ESPAirdropEnabled then
-            local airdropsFolder = Workspace:FindFirstChild("Airdrops") or (Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Airdrops"))
-            RemoveDotESP(airdropsFolder, "AirdropESP")
-        else
-            task.spawn(function()
-                while ESPAirdropEnabled do
-                    local airdropsFolder = Workspace:FindFirstChild("Airdrops") or (Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Airdrops"))
-                    if airdropsFolder then
-                        for _, drop in ipairs(airdropsFolder:GetChildren()) do
-                            CreateOrUpdateDotESP(drop, "AirdropESP", "Airdrop", Color3.fromRGB(255, 0, 255))
-                        end
-                    end
-                    task.wait(0.2)
-                end
-            end)
-        end
-    end,
-})
-
---------------------------------------------------------------------------------
--- AIMLOCK RUNTIME & INPUT HANDLER
---------------------------------------------------------------------------------
+-- Instant Reload Watcher
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
-    if input.UserInputType == Settings.Keybind or input.KeyCode == Settings.Keybind then
-        isAiming = true
+    if InstantReloadEnabled and input.KeyCode == Enum.KeyCode.R then
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            TriggerRemoteReload(tool)
+        end
     end
 end)
 
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Settings.Keybind or input.KeyCode == Settings.Keybind then
-        isAiming = false
-        lockedTarget = nil
-    end
-end)
-
+-- Aimlock Loop
 RunService.RenderStepped:Connect(function()
-    -- FOV Position Update
     if FOVCircle then
-        local mousePos = UserInputService:GetMouseLocation()
-        FOVCircle.Position = mousePos
+        FOVCircle.Position = UserInputService:GetMouseLocation()
     end
 
-    -- Aimlock Camera Logic
     if Settings.AimlockEnabled and isAiming then
         if not lockedTarget or not lockedTarget.Parent or not canBeDamaged(lockedTarget.Parent) then
             lockedTarget = getClosestZombie()
