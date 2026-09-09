@@ -13,8 +13,8 @@ local Window = Rayfield:CreateWindow({
     Name = "Zombie Aimlock & Utility Hub",
     LoadingTitle = "Loading Script...",
     LoadingSubtitle = "Rayfield UI",
-    DisableRayfieldPrompts = true, -- Disables notification prompts from Rayfield
-    DisableBuildWarnings = true,  -- Disables Rayfield build warning popups
+    DisableRayfieldPrompts = true,
+    DisableBuildWarnings = true,
     ConfigurationSaving = {
         Enabled = true,
         FolderName = "ZombieHubConfig",
@@ -38,12 +38,12 @@ local MiscTab = Window:CreateTab("Misc", "settings")
 --------------------------------------------------------------------------------
 local Settings = {
     AimlockEnabled = true,
-    Keybind = Enum.UserInputType.MouseButton2, -- Right Click Hold
+    Keybind = Enum.UserInputType.MouseButton2,
     CheckDamageable = true,
-    TargetMode = "Distance", -- "Distance" or "Cursor"
-    MaxDistance = 500,       -- 0 = Unlimited
-    AimMethod = "Camera",    -- "Camera" or "MouseRel"
-    IgnorePlayers = true,    -- Ensures players are never targeted
+    TargetMode = "Distance",
+    MaxDistance = 500,
+    AimMethod = "Camera",
+    IgnorePlayers = true,
     Smoothness = 0.5,
     FOVSize = 100,
     ShowFOV = true
@@ -52,7 +52,6 @@ local Settings = {
 local lockedTarget = nil
 local isAiming = false
 
--- FOV Circle Setup
 local FOVCircle = nil
 if Drawing and Drawing.new then
     pcall(function()
@@ -98,10 +97,7 @@ end
 
 local function isPlayerCharacter(character)
     if not character then return false end
-    
-    if Players:GetPlayerFromCharacter(character) then
-        return true
-    end
+    if Players:GetPlayerFromCharacter(character) then return true end
 
     if character:GetAttribute("IsPlayer") == true 
        or character:GetAttribute("Player") == true 
@@ -627,8 +623,13 @@ workspace.DescendantAdded:Connect(function(desc)
 end)
 
 --------------------------------------------------------------------------------
--- ESP ENGINE
+-- ESP ENGINE & CONFIG
 --------------------------------------------------------------------------------
+local ESPConfig = {
+    ShowNames = true,
+    ShowDistance = true
+}
+
 local ESPZombieEnabled = false
 local ESPSurvivorEnabled = false
 local ESPPlayerEnabled = false
@@ -668,19 +669,32 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
 
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    
     local distanceText = ""
-    if hrp then
+    if hrp and ESPConfig.ShowDistance then
         local dist = math.floor((hrp.Position - adorneePart.Position).Magnitude)
         distanceText = string.format(" [%dm]", dist)
     end
 
-    local displayName = (customName or targetInstance.Name) .. distanceText
+    local baseName = customName or targetInstance.Name
+    local displayName = ""
+    
+    if ESPConfig.ShowNames and ESPConfig.ShowDistance then
+        displayName = baseName .. distanceText
+    elseif ESPConfig.ShowNames then
+        displayName = baseName
+    elseif ESPConfig.ShowDistance then
+        displayName = distanceText:gsub("^%s*", "")
+    else
+        displayName = ""
+    end
 
     local existingGui = adorneePart:FindFirstChild(espTag)
     if existingGui then
         local label = existingGui:FindFirstChildOfClass("TextLabel")
         if label then
             label.Text = displayName
+            label.Visible = (displayName ~= "")
         end
         return
     end
@@ -709,6 +723,7 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     label.Position = UDim2.new(0, 0, 0, -20)
     label.BackgroundTransparency = 1
     label.Text = displayName
+    label.Visible = (displayName ~= "")
     label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
     label.TextStrokeTransparency = 0
     label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
@@ -729,8 +744,26 @@ local function RemoveDotESP(parentFolder, espTag)
 end
 
 --------------------------------------------------------------------------------
--- ESP TAB CONTROLS
+-- ESP TAB CONTROLS (Individual Name & Distance Toggles + Categories)
 --------------------------------------------------------------------------------
+ESPTab:CreateToggle({
+    Name = "Show Names in ESP",
+    CurrentValue = true,
+    Flag = "ShowNamesToggle",
+    Callback = function(Value)
+        ESPConfig.ShowNames = Value
+    end,
+})
+
+ESPTab:CreateToggle({
+    Name = "Show Distance in ESP",
+    CurrentValue = true,
+    Flag = "ShowDistanceToggle",
+    Callback = function(Value)
+        ESPConfig.ShowDistance = Value
+    end,
+})
+
 ESPTab:CreateToggle({
     Name = "Zombie ESP (Name + Red Dot)",
     CurrentValue = false,
@@ -975,7 +1008,6 @@ end)
 RunService.RenderStepped:Connect(function()
     local mousePos = UserInputService:GetMouseLocation()
 
-    -- Update FOV Circle
     if FOVCircle then
         FOVCircle.Position = mousePos
         FOVCircle.Radius = Settings.FOVSize
@@ -987,7 +1019,6 @@ RunService.RenderStepped:Connect(function()
         return
     end
 
-    -- Aimlock Processing
     if lockedTarget and lockedTarget.Parent and canBeDamaged(lockedTarget.Parent) then
         local humanoid = lockedTarget.Parent:FindFirstChildOfClass("Humanoid")
         if humanoid and humanoid.Health > 0 then
@@ -1012,5 +1043,4 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Load saved configuration options from disk
 Rayfield:LoadConfiguration()
