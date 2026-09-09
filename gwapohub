@@ -473,7 +473,7 @@ MovementTab:CreateSlider({
 })
 
 --------------------------------------------------------------------------------
--- COLOR-CODED NAMED DOT ESP ENGINE
+-- COLOR-CODED NAMED DOT ESP ENGINE WITH ITEM NAMES
 --------------------------------------------------------------------------------
 local ESPZombieEnabled = false
 local ESPSurvivorEnabled = false
@@ -531,14 +531,15 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     local gui = Instance.new("BillboardGui")
     gui.Name = espTag
     gui.Adornee = adorneePart
-    gui.Size = UDim2.new(0, 200, 0, 40)
+    gui.Size = UDim2.new(0, 200, 0, 50)
     gui.StudsOffset = Vector3.new(0, 2, 0)
     gui.AlwaysOnTop = true
     gui.Parent = adorneePart
 
+    -- Colored ESP Dot
     local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0, 6, 0, 6)
-    dot.Position = UDim2.new(0.5, -3, 0.5, -3)
+    dot.Size = UDim2.new(0, 8, 0, 8)
+    dot.Position = UDim2.new(0.5, -4, 0.5, -4)
     dot.BackgroundColor3 = color or Color3.fromRGB(255, 255, 255)
     dot.BorderSizePixel = 0
     dot.Parent = gui
@@ -547,15 +548,16 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     corner.CornerRadius = UDim.new(1, 0)
     corner.Parent = dot
 
+    -- Dynamic Name + Distance Text Label
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 0, 18)
-    label.Position = UDim2.new(0, 0, 0, -18)
+    label.Size = UDim2.new(1, 0, 0, 20)
+    label.Position = UDim2.new(0, 0, 0, -20)
     label.BackgroundTransparency = 1
     label.Text = displayName
     label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
     label.TextStrokeTransparency = 0
     label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    label.TextSize = 12
+    label.TextSize = 13
     label.Font = Enum.Font.SourceSansBold
     label.Parent = gui
 end
@@ -643,7 +645,7 @@ ESPTab:CreateToggle({
                         for _, item in ipairs(droppedFolder:GetChildren()) do
                             if SelectedItemName and item.Name == SelectedItemName then
                                 local col = GetItemTypeColor(item.Name)
-                                CreateOrUpdateDotESP(item, "SelectedItemESP", "[Target] " .. item.Name, col)
+                                CreateOrUpdateDotESP(item, "SelectedItemESP", item.Name, col)
                             else
                                 for _, desc in ipairs(item:GetDescendants()) do
                                     if desc:IsA("BillboardGui") and desc.Name == "SelectedItemESP" then
@@ -704,7 +706,7 @@ ESPTab:CreateToggle({
                         if crateIndex then
                             local targetCrate = cratesFolder:GetChildren()[crateIndex]
                             if targetCrate then
-                                CreateOrUpdateDotESP(targetCrate, "SelectedCrateESP", "[Target Crate] " .. targetCrate.Name, Color3.fromRGB(255, 170, 0))
+                                CreateOrUpdateDotESP(targetCrate, "SelectedCrateESP", targetCrate.Name, Color3.fromRGB(255, 170, 0))
                             end
                         end
                     end
