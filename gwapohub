@@ -8,12 +8,18 @@ local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- Create Window
+-- Create Window with Auto-Save Enabled & Notifications Disabled
 local Window = Rayfield:CreateWindow({
     Name = "Zombie Aimlock & Utility Hub",
     LoadingTitle = "Loading Script...",
     LoadingSubtitle = "Rayfield UI",
-    ConfigurationSaving = { Enabled = false },
+    DisableRayfieldPrompts = true, -- Disables notification prompts from Rayfield
+    DisableBuildWarnings = true,  -- Disables Rayfield build warning popups
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "ZombieHubConfig",
+        FileName = "ZombieHub_Config"
+    },
     Discord = { Enabled = false },
     KeySystem = false
 })
@@ -817,3 +823,6 @@ RunService.RenderStepped:Connect(function()
         lockedTarget = nil
     end
 end)
+
+-- Load saved configuration options from disk
+Rayfield:LoadConfiguration()
