@@ -27,9 +27,7 @@ local Window = Rayfield:CreateWindow({
 
 -- Create Tabs
 local CombatTab = Window:CreateTab("Combat", "crosshair")
-local ItemsTab = Window:CreateTab("Items", "package")
-local BackpackTab = Window:CreateTab("Backpack", "briefcase")
-local CratesTab = Window:CreateTab("Crates", "box")
+local ItemsCratesTab = Window:CreateTab("Items & Crates", "package")
 local MovementTab = Window:CreateTab("Movement", "footprints")
 local ESPTab = Window:CreateTab("ESP", "eye")
 local MiscTab = Window:CreateTab("Misc", "settings")
@@ -40,6 +38,7 @@ local MiscTab = Window:CreateTab("Misc", "settings")
 local Settings = {
     AimlockEnabled = true,
     SilentAimEnabled = false,
+    AutoShootEnabled = false,
     Keybind = Enum.UserInputType.MouseButton2,
     CheckDamageable = true,
     TargetMode = "Distance",
@@ -48,14 +47,19 @@ local Settings = {
     IgnorePlayers = true,
     Smoothness = 0.5,
     FOVSize = 100,
-    ShowFOV = true
+    ShowFOV = true,
+    ShootDelay = 0.05,
+    AimPitch = 0.00325
 }
 
 local KillAuraEnabled = false
 local KillAuraRange = 25
 local AutoTargetSyncEnabled = false
 local RemoteFastReloadEnabled = false
+local InstantReloadEnabled = false
+local AutoReloadEnabled = false
 local SilentAimEnabled = false
+local AutoShootEnabled = false
 
 local FOVCircle = nil
 if Drawing and Drawing.new then
@@ -73,7 +77,11 @@ end
 local function canBeDamaged(character)
     if not character then return false end
     local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return false end
+    if humanoid and humanoid.Health <= 0 then return false end
+
+    local isDead = character:GetAttribute("Dead")
+    local isUntargetable = character:GetAttribute("Untargetable")
+    if isDead or isUntargetable then return false end
 
     if Settings.CheckDamageable then
         if character:FindFirstChildOfClass("ForceField") or character:FindFirstChild("ForceField") then
@@ -148,31 +156,27 @@ local function getClosestZombie()
     local mousePos = UserInputService:GetMouseLocation()
     local myPos = getLocalRootPosition()
 
-    local charactersFolder = Workspace:FindFirstChild("Characters")
-    if not charactersFolder then return nil end
+    local charactersFolder = Workspace:FindFirstChild("Characters") or Workspace
 
     for _, char in ipairs(charactersFolder:GetChildren()) do
-        if isZombieEnemy(char) and canBeDamaged(char) then
+        if char:IsA("Model") and isZombieEnemy(char) and canBeDamaged(char) then
             local part = getTargetPart(char)
             if part then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-                if onScreen then
-                    local cursorDistance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                    
-                    if cursorDistance <= Settings.FOVSize then
-                        local worldDistance = (part.Position - myPos).Magnitude
-                        
-                        if Settings.MaxDistance == 0 or worldDistance <= Settings.MaxDistance then
-                            if Settings.TargetMode == "Distance" then
-                                if worldDistance < shortestMetric then
-                                    shortestMetric = worldDistance
-                                    closestPart = part
-                                end
-                            else
-                                if cursorDistance < shortestMetric then
-                                    shortestMetric = cursorDistance
-                                    closestPart = part
-                                end
+                local worldDistance = (part.Position - myPos).Magnitude
+                
+                if Settings.MaxDistance == 0 or worldDistance <= Settings.MaxDistance then
+                    if Settings.TargetMode == "Distance" then
+                        if worldDistance < shortestMetric then
+                            shortestMetric = worldDistance
+                            closestPart = part
+                        end
+                    else
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                        if onScreen then
+                            local cursorDistance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                            if cursorDistance <= Settings.FOVSize and cursorDistance < shortestMetric then
+                                shortestMetric = cursorDistance
+                                closestPart = part
                             end
                         end
                     end
@@ -181,6 +185,18 @@ local function getClosestZombie()
         end
     end
     return closestPart
+end
+
+local function GetValidTargets()
+    local targets = {}
+    local charsFolder = Workspace:FindFirstChild("Characters") or Workspace
+
+    for _, enemy in ipairs(charsFolder:GetChildren()) do
+        if enemy:IsA("Model") and isZombieEnemy(enemy) and canBeDamaged(enemy) then
+            table.insert(targets, enemy)
+        end
+    end
+    return targets
 end
 
 --------------------------------------------------------------------------------
@@ -227,7 +243,7 @@ if hookmetamethod and getnamecallmethod then
 end
 
 --------------------------------------------------------------------------------
--- COMBAT TAB CONTROLS
+-- COMBAT TAB CONTROLS & LOOPS
 --------------------------------------------------------------------------------
 CombatTab:CreateToggle({
     Name = "Enable Zombie Aimlock",
@@ -235,6 +251,15 @@ CombatTab:CreateToggle({
     Flag = "AimlockEnabledToggle",
     Callback = function(Value)
         Settings.AimlockEnabled = Value
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Auto-Shoot Target (500 Stud Range Loop)",
+    CurrentValue = false,
+    Flag = "AutoShootToggle",
+    Callback = function(Value)
+        AutoShootEnabled = Value
     end,
 })
 
@@ -267,6 +292,73 @@ CombatTab:CreateSlider({
     end,
 })
 
+-- Master Auto-Shoot Loop
+task.spawn(function()
+    while true do
+        task.wait(Settings.ShootDelay)
+        if AutoShootEnabled then
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                local tool = char:FindFirstChildOfClass("Tool") or LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+                if tool then
+                    local shootRemote = tool:FindFirstChild("Shoot")
+                    if shootRemote then
+                        local myPos = getLocalRootPosition()
+                        local targetPart = getClosestZombie()
+
+                        if targetPart and targetPart.Parent then
+                            local targetModel = targetPart.Parent
+                            local targetPos = targetPart.Position
+
+                            -- 1. Sync Ammo
+                            local syncAmmoRemote = tool:FindFirstChild("SyncAmmo")
+                            if syncAmmoRemote then
+                                pcall(function() syncAmmoRemote:FireServer() end)
+                            end
+
+                            -- 2. Aim Replication
+                            local torso = char:FindFirstChild("Torso")
+                            if torso then
+                                local aimRotate = torso:FindFirstChild("AimRotate")
+                                if aimRotate and aimRotate:FindFirstChild("ReplicateAim") then
+                                    pcall(function()
+                                        aimRotate.ReplicateAim:FireServer(Settings.AimPitch, false)
+                                    end)
+                                end
+                            end
+
+                            -- 3. Construct Payload & Fire Remote
+                            local payload = {
+                                {
+                                    Target = targetPos,
+                                    HitData = {
+                                        {
+                                            HitChar = targetModel,
+                                            HitPos = targetPos,
+                                            HitPart = targetPart
+                                        }
+                                    },
+                                    EffectResults = {
+                                        {
+                                            Origin = myPos,
+                                            End = targetPos
+                                        }
+                                    }
+                                }
+                            }
+
+                            pcall(function()
+                                shootRemote:FireServer(myPos, payload, 0, 4)
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Melee Kill Aura Loop
 task.spawn(function()
     while task.wait(0.1) do
         if KillAuraEnabled then
@@ -279,14 +371,12 @@ task.spawn(function()
 
                     if swingRemote or hitRemote then
                         local targets = {}
-                        local charsFolder = Workspace:FindFirstChild("Characters")
-                        if charsFolder then
-                            for _, enemy in ipairs(charsFolder:GetChildren()) do
-                                if isZombieEnemy(enemy) and canBeDamaged(enemy) then
-                                    local part = getTargetPart(enemy)
-                                    if part and (part.Position - getLocalRootPosition()).Magnitude <= KillAuraRange then
-                                        table.insert(targets, enemy)
-                                    end
+                        local charsFolder = Workspace:FindFirstChild("Characters") or Workspace
+                        for _, enemy in ipairs(charsFolder:GetChildren()) do
+                            if enemy:IsA("Model") and isZombieEnemy(enemy) and canBeDamaged(enemy) then
+                                local part = getTargetPart(enemy)
+                                if part and (part.Position - getLocalRootPosition()).Magnitude <= KillAuraRange then
+                                    table.insert(targets, enemy)
                                 end
                             end
                         end
@@ -312,22 +402,15 @@ CombatTab:CreateToggle({
 })
 
 task.spawn(function()
-    while task.wait(0.5) do
+    while true do
+        task.wait(2.0)
         if AutoTargetSyncEnabled then
             local char = LocalPlayer.Character
             local autoTargetClient = char and char:FindFirstChild("AutoTargetClient")
             local updateRemote = autoTargetClient and autoTargetClient:FindFirstChild("UpdateNearbyTargets")
 
             if updateRemote then
-                local targets = {}
-                local charsFolder = Workspace:FindFirstChild("Characters")
-                if charsFolder then
-                    for _, enemy in ipairs(charsFolder:GetChildren()) do
-                        if isZombieEnemy(enemy) and canBeDamaged(enemy) then
-                            table.insert(targets, enemy)
-                        end
-                    end
-                end
+                local targets = GetValidTargets()
                 if #targets > 0 then
                     pcall(function() updateRemote:FireServer(targets) end)
                 end
@@ -335,8 +418,6 @@ task.spawn(function()
         end
     end
 end)
-
-local InstantReloadEnabled = false
 
 local function ApplyInstantReload(tool)
     if not tool or not tool:IsA("Tool") then return end
@@ -369,7 +450,10 @@ local function TriggerRemoteReload(tool)
 
     if reloadRemote and reloadRemote:IsA("RemoteFunction") then
         pcall(function() reloadRemote:InvokeServer() end)
+    elseif reloadRemote and reloadRemote:IsA("RemoteEvent") then
+        pcall(function() reloadRemote:FireServer() end)
     end
+
     if syncRemote and syncRemote:IsA("RemoteEvent") then
         pcall(function() syncRemote:FireServer() end)
     end
@@ -395,6 +479,15 @@ local function ProcessAllTools()
         end
     end
 end
+
+CombatTab:CreateToggle({
+    Name = "Auto Reload (When Ammo Empty)",
+    CurrentValue = false,
+    Flag = "AutoReloadToggle",
+    Callback = function(Value)
+        AutoReloadEnabled = Value
+    end,
+})
 
 CombatTab:CreateToggle({
     Name = "Instant Reload (Attributes & Values)",
@@ -431,6 +524,34 @@ CombatTab:CreateButton({
         end
     end,
 })
+
+-- Auto Reload Loop
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if AutoReloadEnabled then
+            local char = LocalPlayer.Character
+            local tool = char and char:FindFirstChildOfClass("Tool")
+            if tool then
+                local ammoObj = tool:FindFirstChild("Ammo") or tool:FindFirstChild("Clip") or tool:FindFirstChild("Mag")
+                local currentAmmo = nil
+
+                if ammoObj then
+                    if ammoObj:IsA("ValueBase") then
+                        currentAmmo = ammoObj.Value
+                    end
+                else
+                    currentAmmo = tool:GetAttribute("Ammo") or tool:GetAttribute("Clip")
+                end
+
+                if currentAmmo == nil or (type(currentAmmo) == "number" and currentAmmo <= 0) then
+                    if InstantReloadEnabled then ApplyInstantReload(tool) end
+                    TriggerRemoteReload(tool)
+                end
+            end
+        end
+    end
+end)
 
 local function HookToolListeners(container)
     if not container then return end
@@ -565,7 +686,7 @@ CombatTab:CreateSlider({
 })
 
 --------------------------------------------------------------------------------
--- ITEMS TAB
+-- ITEMS & CRATES TAB
 --------------------------------------------------------------------------------
 local SelectedItemName = nil
 
@@ -591,7 +712,7 @@ local function GetGroupedItemNames()
     return options
 end
 
-local ItemDropdown = ItemsTab:CreateDropdown({
+local ItemDropdown = ItemsCratesTab:CreateDropdown({
     Name = "Select Target Item",
     Options = GetGroupedItemNames(),
     CurrentOption = {"No items found"},
@@ -619,64 +740,6 @@ task.spawn(function()
     end
 end)
 
---------------------------------------------------------------------------------
--- BACKPACK TAB
---------------------------------------------------------------------------------
-local SelectedBackpackItem = nil
-
-local function GetBackpackStorageItems()
-    local counts = {}
-    local storage = ReplicatedStorage:FindFirstChild("BackpackStorage")
-    if storage then
-        for _, item in ipairs(storage:GetChildren()) do
-            counts[item.Name] = (counts[item.Name] or 0) + 1
-        end
-    end
-
-    local options = {}
-    for name, count in pairs(counts) do
-        table.insert(options, string.format("%s x%d", name, count))
-    end
-
-    if #options == 0 then
-        table.insert(options, "No storage items found")
-    else
-        table.sort(options)
-    end
-    return options
-end
-
-local BackpackDropdown = BackpackTab:CreateDropdown({
-    Name = "Select Storage Item",
-    Options = GetBackpackStorageItems(),
-    CurrentOption = {"No storage items found"},
-    MultipleOptions = false,
-    Flag = "BackpackStorageDropdown",
-    Callback = function(Options)
-        local rawOption = type(Options) == "table" and Options[1] or Options
-        if rawOption and rawOption ~= "No storage items found" then
-            SelectedBackpackItem = rawOption:match("^(.-)%s*x%d+$") or rawOption
-        else
-            SelectedBackpackItem = nil
-        end
-    end,
-})
-
-task.spawn(function()
-    local lastSerialized = ""
-    while task.wait(1) do
-        local currentOptions = GetBackpackStorageItems()
-        local currentSerialized = table.concat(currentOptions, "|")
-        if currentSerialized ~= lastSerialized then
-            lastSerialized = currentSerialized
-            BackpackDropdown:Refresh(currentOptions)
-        end
-    end
-end)
-
---------------------------------------------------------------------------------
--- CRATES TAB
---------------------------------------------------------------------------------
 local SelectedCrateName = nil
 
 local function GetCrateNames()
@@ -691,7 +754,7 @@ local function GetCrateNames()
     return names
 end
 
-local CrateDropdown = CratesTab:CreateDropdown({
+local CrateDropdown = ItemsCratesTab:CreateDropdown({
     Name = "Select Crate / Chest",
     Options = GetCrateNames(),
     CurrentOption = {"No crates found"},
@@ -702,7 +765,7 @@ local CrateDropdown = CratesTab:CreateDropdown({
     end,
 })
 
-CratesTab:CreateButton({
+ItemsCratesTab:CreateButton({
     Name = "Refresh Crate List",
     Callback = function()
         CrateDropdown:Refresh(GetCrateNames())
@@ -1093,15 +1156,15 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPZombieEnabled = Value
         if not ESPZombieEnabled then
-            local charsFolder = Workspace:FindFirstChild("Characters")
+            local charsFolder = Workspace:FindFirstChild("Characters") or Workspace
             RemoveDotESP(charsFolder, "ZombieDotESP")
         else
             task.spawn(function()
                 while ESPZombieEnabled do
-                    local charsFolder = Workspace:FindFirstChild("Characters")
+                    local charsFolder = Workspace:FindFirstChild("Characters") or Workspace
                     if charsFolder then
                         for _, char in ipairs(charsFolder:GetChildren()) do
-                            if isZombieEnemy(char) and canBeDamaged(char) then
+                            if char:IsA("Model") and isZombieEnemy(char) and canBeDamaged(char) then
                                 CreateOrUpdateDotESP(char, "ZombieDotESP", char.Name, Color3.fromRGB(255, 50, 50))
                             end
                         end
