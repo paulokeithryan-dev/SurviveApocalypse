@@ -659,7 +659,9 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     if targetInstance:IsA("BasePart") then
         adorneePart = targetInstance
     elseif targetInstance:IsA("Model") then
-        adorneePart = targetInstance.PrimaryPart or targetInstance:FindFirstChildOfClass("BasePart") or targetInstance:FindFirstChild("Head", true) or targetInstance:FindFirstChild("HumanoidRootPart", true)
+        adorneePart = targetInstance.PrimaryPart 
+            or targetInstance:FindFirstChildOfClass("BasePart") 
+            or targetInstance:FindFirstChildWhichIsA("BasePart", true)
     end
 
     if not adorneePart then return end
