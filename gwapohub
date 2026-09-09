@@ -234,6 +234,7 @@ CombatTab:CreateSlider({
     Flag = "FOVSizeSlider",
     Callback = function(Value)
         Settings.FOVSize = Value
+        if FOVCircle then FOVCircle.Radius = Value end
     end,
 })
 
@@ -243,6 +244,7 @@ CombatTab:CreateToggle({
     Flag = "ShowFOVToggle",
     Callback = function(Value)
         Settings.ShowFOV = Value
+        if FOVCircle then FOVCircle.Visible = Value end
     end,
 })
 
@@ -661,8 +663,9 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
         adorneePart = targetInstance
     elseif targetInstance:IsA("Model") then
         adorneePart = targetInstance.PrimaryPart 
-            or targetInstance:FindFirstChildOfClass("BasePart") 
-            or targetInstance:FindFirstChildWhichIsA("BasePart", true)
+            or targetInstance:FindFirstChild("Head")
+            or targetInstance:FindFirstChild("HumanoidRootPart")
+            or targetInstance:FindFirstChildOfClass("BasePart")
     end
 
     if not adorneePart then return end
@@ -694,6 +697,7 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
         local label = existingGui:FindFirstChildOfClass("TextLabel")
         if label then
             label.Text = displayName
+            label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
             label.Visible = (displayName ~= "")
         end
         return
@@ -702,33 +706,25 @@ local function CreateOrUpdateDotESP(targetInstance, espTag, customName, color)
     local gui = Instance.new("BillboardGui")
     gui.Name = espTag
     gui.Adornee = adorneePart
-    gui.Size = UDim2.new(0, 200, 0, 50)
-    gui.StudsOffset = Vector3.new(0, 2, 0)
+    gui.Size = UDim2.new(0, 200, 0, 30)
+    gui.StudsOffset = Vector3.new(0, 2.5, 0)
     gui.AlwaysOnTop = true
+    gui.LightInfluence = 0
     gui.Parent = adorneePart
 
-    local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0, 8, 0, 8)
-    dot.Position = UDim2.new(0.5, -4, 0.5, -4)
-    dot.BackgroundColor3 = color or Color3.fromRGB(255, 255, 255)
-    dot.BorderSizePixel = 0
-    dot.Parent = gui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = dot
-
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 0, 20)
-    label.Position = UDim2.new(0, 0, 0, -20)
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.Position = UDim2.new(0, 0, 0, 0)
     label.BackgroundTransparency = 1
     label.Text = displayName
     label.Visible = (displayName ~= "")
     label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
     label.TextStrokeTransparency = 0
     label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    label.TextSize = 13
+    label.TextSize = 14
     label.Font = Enum.Font.SourceSansBold
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.TextYAlignment = Enum.TextYAlignment.Center
     label.Parent = gui
 end
 
@@ -744,7 +740,7 @@ local function RemoveDotESP(parentFolder, espTag)
 end
 
 --------------------------------------------------------------------------------
--- ESP TAB CONTROLS (Individual Name & Distance Toggles + Categories)
+-- ESP TAB CONTROLS
 --------------------------------------------------------------------------------
 ESPTab:CreateToggle({
     Name = "Show Names in ESP",
@@ -765,7 +761,7 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "Zombie ESP (Name + Red Dot)",
+    Name = "Zombie ESP",
     CurrentValue = false,
     Flag = "ZombieESPToggle",
     Callback = function(Value)
@@ -792,7 +788,7 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "Player ESP (Name + Blue Dot)",
+    Name = "Player ESP",
     CurrentValue = false,
     Flag = "PlayerESPToggle",
     Callback = function(Value)
@@ -823,7 +819,7 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "Survivor ESP (Name + Green Dot)",
+    Name = "Survivor ESP",
     CurrentValue = false,
     Flag = "SurvivorESPToggle",
     Callback = function(Value)
@@ -848,7 +844,7 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "Selected Item ESP (Name + Color Coded)",
+    Name = "Selected Item ESP",
     CurrentValue = false,
     Flag = "SelectedItemESPToggle",
     Callback = function(Value)
@@ -882,7 +878,7 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "All Dropped Items ESP (Name + Color Coded)",
+    Name = "All Dropped Items ESP",
     CurrentValue = false,
     Flag = "AllItemsESPToggle",
     Callback = function(Value)
@@ -908,7 +904,7 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "Selected Crate ESP (Name + Orange Dot)",
+    Name = "Selected Crate ESP",
     CurrentValue = false,
     Flag = "SelectedCrateESPToggle",
     Callback = function(Value)
@@ -937,7 +933,7 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "All Crates / Chests ESP (Name + Gold Dot)",
+    Name = "All Crates / Chests ESP",
     CurrentValue = false,
     Flag = "CratesESPToggle",
     Callback = function(Value)
@@ -962,22 +958,21 @@ ESPTab:CreateToggle({
 })
 
 ESPTab:CreateToggle({
-    Name = "Airdrop / Supply Crate ESP (Name + Cyan Dot)",
+    Name = "Airdrop ESP",
     CurrentValue = false,
     Flag = "AirdropESPToggle",
     Callback = function(Value)
         ESPAirdropEnabled = Value
         if not ESPAirdropEnabled then
-            local specialFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Special")
-            RemoveDotESP(specialFolder, "AirdropESP")
+            local airdropsFolder = workspace:FindFirstChild("Airdrops") or (workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Airdrops"))
+            RemoveDotESP(airdropsFolder, "AirdropESP")
         else
             task.spawn(function()
                 while ESPAirdropEnabled do
-                    local specialFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Special")
-                    if specialFolder then
-                        local supplyCrate = specialFolder:FindFirstChild("Supply Crate")
-                        if supplyCrate then
-                            CreateOrUpdateDotESP(supplyCrate, "AirdropESP", "Airdrop Supply Crate", Color3.fromRGB(0, 255, 255))
+                    local airdropsFolder = workspace:FindFirstChild("Airdrops") or (workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Airdrops"))
+                    if airdropsFolder then
+                        for _, drop in ipairs(airdropsFolder:GetChildren()) do
+                            CreateOrUpdateDotESP(drop, "AirdropESP", "Airdrop", Color3.fromRGB(255, 0, 255))
                         end
                     end
                     task.wait(0.2)
@@ -988,59 +983,50 @@ ESPTab:CreateToggle({
 })
 
 --------------------------------------------------------------------------------
--- INPUT & RUNSERVICE LISTENERS FOR ZOMBIE AIMLOCK
+-- AIMLOCK RUNTIME & INPUT HANDLER
 --------------------------------------------------------------------------------
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
-    if Settings.AimlockEnabled and input.UserInputType == Settings.Keybind then
+    if input.UserInputType == Settings.Keybind or input.KeyCode == Settings.Keybind then
         isAiming = true
-        lockedTarget = getClosestZombie()
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Settings.Keybind then
+    if input.UserInputType == Settings.Keybind or input.KeyCode == Settings.Keybind then
         isAiming = false
         lockedTarget = nil
     end
 end)
 
 RunService.RenderStepped:Connect(function()
-    local mousePos = UserInputService:GetMouseLocation()
-
+    -- FOV Position Update
     if FOVCircle then
+        local mousePos = UserInputService:GetMouseLocation()
         FOVCircle.Position = mousePos
-        FOVCircle.Radius = Settings.FOVSize
-        FOVCircle.Visible = Settings.ShowFOV and Settings.AimlockEnabled
     end
 
-    if not Settings.AimlockEnabled or not isAiming or not UserInputService:IsMouseButtonPressed(Settings.Keybind) then
-        lockedTarget = nil
-        return
-    end
+    -- Aimlock Camera Logic
+    if Settings.AimlockEnabled and isAiming then
+        if not lockedTarget or not lockedTarget.Parent or not canBeDamaged(lockedTarget.Parent) then
+            lockedTarget = getClosestZombie()
+        end
 
-    if lockedTarget and lockedTarget.Parent and canBeDamaged(lockedTarget.Parent) then
-        local humanoid = lockedTarget.Parent:FindFirstChildOfClass("Humanoid")
-        if humanoid and humanoid.Health > 0 then
-            local targetScreenPos, onScreen = Camera:WorldToViewportPoint(lockedTarget.Position)
-
-            if onScreen then
-                if Settings.AimMethod == "MouseRel" and mousemoverel then
-                    local deltaX = (targetScreenPos.X - mousePos.X) * Settings.Smoothness
-                    local deltaY = (targetScreenPos.Y - mousePos.Y) * Settings.Smoothness
-                    mousemoverel(deltaX, deltaY)
-                else
-                    local currentCFrame = Camera.CFrame
-                    local targetCFrame = CFrame.new(currentCFrame.Position, lockedTarget.Position)
-                    Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.Smoothness)
+        if lockedTarget then
+            local targetPos = lockedTarget.Position
+            if Settings.AimMethod == "Camera" then
+                local currentCFrame = Camera.CFrame
+                local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+                Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.Smoothness)
+            elseif Settings.AimMethod == "MouseRel" then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
+                if onScreen then
+                    local mousePos = UserInputService:GetMouseLocation()
+                    local moveX = (screenPos.X - mousePos.X) * Settings.Smoothness
+                    local moveY = (screenPos.Y - mousePos.Y) * Settings.Smoothness
+                    mousemoverel(moveX, moveY)
                 end
             end
-        else
-            lockedTarget = nil
         end
-    else
-        lockedTarget = nil
     end
 end)
-
-Rayfield:LoadConfiguration()
