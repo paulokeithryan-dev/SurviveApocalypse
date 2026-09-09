@@ -4,9 +4,10 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+local Camera = Workspace.CurrentCamera
 
 -- Create Window with Auto-Save Enabled & Notifications Disabled
 local Window = Rayfield:CreateWindow({
@@ -146,7 +147,7 @@ local function getClosestZombie()
     local mousePos = UserInputService:GetMouseLocation()
     local myPos = getLocalRootPosition()
 
-    local charactersFolder = workspace:FindFirstChild("Characters")
+    local charactersFolder = Workspace:FindFirstChild("Characters")
     if not charactersFolder then return nil end
 
     for _, char in ipairs(charactersFolder:GetChildren()) do
@@ -192,6 +193,110 @@ CombatTab:CreateToggle({
         Settings.AimlockEnabled = Value
     end,
 })
+
+-- INSTANT RELOAD SYSTEM
+local InstantReloadEnabled = false
+
+local function ApplyInstantReload(tool)
+    if not tool or not tool:IsA("Tool") then return end
+    
+    -- Zero out reload attributes
+    for _, attr in ipairs({"ReloadTime", "ReloadDuration", "ReloadSpeed", "ReloadDelay", "Cooldown"}) do
+        if tool:GetAttribute(attr) ~= nil then
+            tool:SetAttribute(attr, 0)
+        end
+    end
+
+    -- Zero out Value instances inside the tool
+    for _, desc in ipairs(tool:GetDescendants()) do
+        if desc:IsA("ValueBase") then
+            local name = desc.Name:lower()
+            if name:find("reloadtime") or name:find("reloaddelay") or name:find("reloadspeed") then
+                if desc:IsA("NumberValue") or desc:IsA("IntValue") then
+                    desc.Value = 0
+                end
+            elseif name:find("reloading") and desc:IsA("BoolValue") then
+                desc.Value = false
+            end
+        end
+    end
+end
+
+local function ProcessAllTools()
+    local char = LocalPlayer.Character
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") then ApplyInstantReload(item) end
+        end
+    end
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then ApplyInstantReload(item) end
+        end
+    end
+end
+
+CombatTab:CreateToggle({
+    Name = "Instant Reload",
+    CurrentValue = false,
+    Flag = "InstantReloadToggle",
+    Callback = function(Value)
+        InstantReloadEnabled = Value
+        if InstantReloadEnabled then
+            ProcessAllTools()
+        end
+    end,
+})
+
+-- Listen for new tools added to backpack or character
+local function HookToolListeners(container)
+    if not container then return end
+    container.ChildAdded:Connect(function(child)
+        if InstantReloadEnabled and child:IsA("Tool") then
+            task.wait(0.05)
+            ApplyInstantReload(child)
+        end
+    end)
+end
+
+if LocalPlayer:FindFirstChildOfClass("Backpack") then
+    HookToolListeners(LocalPlayer:FindFirstChildOfClass("Backpack"))
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    HookToolListeners(char)
+    local backpack = LocalPlayer:WaitForChild("Backpack", 5)
+    if backpack then HookToolListeners(backpack) end
+    
+    -- Speed up reload animations on humanoid
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then
+        hum.AnimationPlayed:Connect(function(track)
+            if InstantReloadEnabled and track.Animation then
+                local animName = track.Animation.Name:lower()
+                if animName:find("reload") then
+                    track:AdjustSpeed(100)
+                end
+            end
+        end)
+    end
+end)
+
+if LocalPlayer.Character then
+    HookToolListeners(LocalPlayer.Character)
+    local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.AnimationPlayed:Connect(function(track)
+            if InstantReloadEnabled and track.Animation then
+                local animName = track.Animation.Name:lower()
+                if animName:find("reload") then
+                    track:AdjustSpeed(100)
+                end
+            end
+        end)
+    end
+end
 
 CombatTab:CreateDropdown({
     Name = "Target Mode",
@@ -284,7 +389,7 @@ local SelectedItemName = nil
 
 local function GetGroupedItemNames()
     local counts = {}
-    local droppedFolder = workspace:FindFirstChild("DroppedItems")
+    local droppedFolder = Workspace:FindFirstChild("DroppedItems")
     if droppedFolder then
         for _, item in ipairs(droppedFolder:GetChildren()) do
             counts[item.Name] = (counts[item.Name] or 0) + 1
@@ -394,7 +499,7 @@ local SelectedCrateName = nil
 
 local function GetCrateNames()
     local names = {}
-    local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+    local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
     if cratesFolder then
         for index, crate in ipairs(cratesFolder:GetChildren()) do
             table.insert(names, string.format("[%d] %s", index, crate.Name))
@@ -441,8 +546,53 @@ MovementTab:CreateSlider({
 })
 
 --------------------------------------------------------------------------------
--- MISC TAB (Noclip, Remove Fog, Fullbright, Zoom, Low Graphics)
+-- MISC TAB (Instant Prompts, Noclip, Remove Fog, Fullbright, Zoom, Low Graphics)
 --------------------------------------------------------------------------------
+-- INSTANT PROXIMITY PROMPTS
+local InstantPromptsEnabled = false
+local PromptConnection = nil
+local originalHoldDurations = {}
+
+local function makeInstant(prompt)
+    if prompt:IsA("ProximityPrompt") then
+        if originalHoldDurations[prompt] == nil then
+            originalHoldDurations[prompt] = prompt.HoldDuration
+        end
+        prompt.HoldDuration = 0
+    end
+end
+
+MiscTab:CreateToggle({
+    Name = "Instant Proximity Prompts",
+    CurrentValue = false,
+    Flag = "InstantPromptsToggle",
+    Callback = function(Value)
+        InstantPromptsEnabled = Value
+        if InstantPromptsEnabled then
+            for _, descendant in ipairs(Workspace:GetDescendants()) do
+                makeInstant(descendant)
+            end
+            if not PromptConnection then
+                PromptConnection = Workspace.DescendantAdded:Connect(function(descendant)
+                    if InstantPromptsEnabled then
+                        makeInstant(descendant)
+                    end
+                end)
+            end
+        else
+            if PromptConnection then
+                PromptConnection:Disconnect()
+                PromptConnection = nil
+            end
+            for prompt, origDuration in pairs(originalHoldDurations) do
+                if prompt and prompt.Parent then
+                    prompt.HoldDuration = origDuration
+                end
+            end
+        end
+    end,
+})
+
 -- NOCLIP
 local NoclipEnabled = false
 local NoclipConnection = nil
@@ -603,21 +753,21 @@ MiscTab:CreateToggle({
                 end
             end
 
-            for _, desc in ipairs(workspace:GetDescendants()) do
+            for _, desc in ipairs(Workspace:GetDescendants()) do
                 ApplyLowGraphics(desc)
             end
 
-            if workspace.Terrain then
-                workspace.Terrain.WaterWaveSize = 0
-                workspace.Terrain.WaterWaveSpeed = 0
-                workspace.Terrain.WaterReflectance = 0
-                workspace.Terrain.WaterTransparency = 0
+            if Workspace.Terrain then
+                Workspace.Terrain.WaterWaveSize = 0
+                Workspace.Terrain.WaterWaveSpeed = 0
+                Workspace.Terrain.WaterReflectance = 0
+                Workspace.Terrain.WaterTransparency = 0
             end
         end
     end,
 })
 
-workspace.DescendantAdded:Connect(function(desc)
+Workspace.DescendantAdded:Connect(function(desc)
     if LowGraphicsEnabled then
         task.wait()
         ApplyLowGraphics(desc)
@@ -767,12 +917,12 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPZombieEnabled = Value
         if not ESPZombieEnabled then
-            local charsFolder = workspace:FindFirstChild("Characters")
+            local charsFolder = Workspace:FindFirstChild("Characters")
             RemoveDotESP(charsFolder, "ZombieDotESP")
         else
             task.spawn(function()
                 while ESPZombieEnabled do
-                    local charsFolder = workspace:FindFirstChild("Characters")
+                    local charsFolder = Workspace:FindFirstChild("Characters")
                     if charsFolder then
                         for _, char in ipairs(charsFolder:GetChildren()) do
                             if isZombieEnemy(char) and canBeDamaged(char) then
@@ -825,12 +975,12 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPSurvivorEnabled = Value
         if not ESPSurvivorEnabled then
-            local survivorsFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Survivors")
+            local survivorsFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Survivors")
             RemoveDotESP(survivorsFolder, "SurvivorDotESP")
         else
             task.spawn(function()
                 while ESPSurvivorEnabled do
-                    local survivorsFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Survivors")
+                    local survivorsFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Survivors")
                     if survivorsFolder then
                         for _, survivor in ipairs(survivorsFolder:GetChildren()) do
                             CreateOrUpdateDotESP(survivor, "SurvivorDotESP", survivor.Name, Color3.fromRGB(0, 255, 128))
@@ -850,12 +1000,12 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPSelectedItemEnabled = Value
         if not ESPSelectedItemEnabled then
-            local droppedFolder = workspace:FindFirstChild("DroppedItems")
+            local droppedFolder = Workspace:FindFirstChild("DroppedItems")
             RemoveDotESP(droppedFolder, "SelectedItemESP")
         else
             task.spawn(function()
                 while ESPSelectedItemEnabled do
-                    local droppedFolder = workspace:FindFirstChild("DroppedItems")
+                    local droppedFolder = Workspace:FindFirstChild("DroppedItems")
                     if droppedFolder then
                         for _, item in ipairs(droppedFolder:GetChildren()) do
                             if SelectedItemName and item.Name == SelectedItemName then
@@ -884,12 +1034,12 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPAllItemsEnabled = Value
         if not ESPAllItemsEnabled then
-            local droppedFolder = workspace:FindFirstChild("DroppedItems")
+            local droppedFolder = Workspace:FindFirstChild("DroppedItems")
             RemoveDotESP(droppedFolder, "AllItemESP")
         else
             task.spawn(function()
                 while ESPAllItemsEnabled do
-                    local droppedFolder = workspace:FindFirstChild("DroppedItems")
+                    local droppedFolder = Workspace:FindFirstChild("DroppedItems")
                     if droppedFolder then
                         for _, item in ipairs(droppedFolder:GetChildren()) do
                             local col = GetItemTypeColor(item.Name)
@@ -910,12 +1060,12 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPSelectedCrateEnabled = Value
         if not ESPSelectedCrateEnabled then
-            local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+            local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
             RemoveDotESP(cratesFolder, "SelectedCrateESP")
         else
             task.spawn(function()
                 while ESPSelectedCrateEnabled do
-                    local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+                    local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
                     if cratesFolder and SelectedCrateName and SelectedCrateName ~= "No crates found" then
                         local crateIndex = tonumber(SelectedCrateName:match("%[(%d+)%]"))
                         if crateIndex then
@@ -939,12 +1089,12 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPCratesEnabled = Value
         if not ESPCratesEnabled then
-            local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+            local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
             RemoveDotESP(cratesFolder, "CrateESP")
         else
             task.spawn(function()
                 while ESPCratesEnabled do
-                    local cratesFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Crates")
+                    local cratesFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Crates")
                     if cratesFolder then
                         for _, crate in ipairs(cratesFolder:GetChildren()) do
                             CreateOrUpdateDotESP(crate, "CrateESP", crate.Name, Color3.fromRGB(255, 215, 0))
@@ -964,12 +1114,12 @@ ESPTab:CreateToggle({
     Callback = function(Value)
         ESPAirdropEnabled = Value
         if not ESPAirdropEnabled then
-            local airdropsFolder = workspace:FindFirstChild("Airdrops") or (workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Airdrops"))
+            local airdropsFolder = Workspace:FindFirstChild("Airdrops") or (Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Airdrops"))
             RemoveDotESP(airdropsFolder, "AirdropESP")
         else
             task.spawn(function()
                 while ESPAirdropEnabled do
-                    local airdropsFolder = workspace:FindFirstChild("Airdrops") or (workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Airdrops"))
+                    local airdropsFolder = Workspace:FindFirstChild("Airdrops") or (Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Airdrops"))
                     if airdropsFolder then
                         for _, drop in ipairs(airdropsFolder:GetChildren()) do
                             CreateOrUpdateDotESP(drop, "AirdropESP", "Airdrop", Color3.fromRGB(255, 0, 255))
